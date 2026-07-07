@@ -1,0 +1,182 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      # POSTGRES_DB no se define: auth_db e items_db se crean vía script de init
+    # Sin mapeo a host: solo lo consumen los servicios de la red interna de
+    # Docker. Para inspección manual usar "docker exec postgres psql ...".
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  auth-service:
+    build: ./auth-service
+    container_name: auth-service
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - LOG_SERVICE_URL=http://log-service:8010
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-changeme-super-secret-key-for-jwt-in-production}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+    volumes:
+      - ./docs:/app/docs:ro
+      - ./README.md:/app/README.md:ro
+    depends_on:
+      log-service:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  log-service:
+    build: ./log-service
+    container_name: log-service
+    ports:
+      - "8010:8010"
+    restart: unless-stopped
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - MONGO_HOST=mongodb
+      - MONGO_PORT=27017
+      - MONGO_DATABASE=logs_db
+      - MONGO_USERNAME=${MONGO_INITDB_ROOT_USERNAME:-root}
+      - MONGO_PASSWORD=${MONGO_INITDB_ROOT_PASSWORD:-root}
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_DEFAULT_USER:-guest}
+      - RABBITMQ_PASSWORD=${RABBITMQ_DEFAULT_PASS:-guest}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  analysis-service:
+    build: ./analysis-service
+    container_name: analysis-service
+    ports:
+      - "8002:8002"
+    restart: unless-stopped
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_PORT=5672
+      - RABBITMQ_USER=${RABBITMQ_DEFAULT_USER:-guest}
+      - RABBITMQ_PASSWORD=${RABBITMQ_DEFAULT_PASS:-guest}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  alert-service:
+    build: ./alert-service
+    container_name: alert-service
+    ports:
+      - "8003:8003"
+    restart: unless-stopped
+    environment:
+      - PORT=8003
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8003/api/health', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  dashboard-service:
+    build: ./dashboard-service
+    container_name: dashboard-service
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    depends_on:
+      - auth-service
+      - log-service
+      - analysis-service
+      - alert-service
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    restart: unless-stopped
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER:-guest}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS:-guest}
+    ports:
+      - "15672:15672"  # UI de gestión (guest/guest) — se mantiene para debugging desde el host
+    # Puerto AMQP 5672 sin mapeo a host: solo lo consumen log-service y
+    # analysis-service dentro de la red interna de Docker.
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  mongodb:
+    image: mongo:7
+    container_name: mongodb
+    restart: unless-stopped
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_INITDB_ROOT_USERNAME:-root}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_INITDB_ROOT_PASSWORD:-root}
+    # Sin mapeo a host: solo lo consume log-service en la red interna de
+    # Docker. Para inspección manual usar "docker exec mongodb mongosh ...".
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres_data:
+    driver: local
+  mongo_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
