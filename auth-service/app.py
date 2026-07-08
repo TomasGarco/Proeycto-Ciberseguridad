@@ -2,6 +2,7 @@ import os
 import time
 import platform
 import sys
+from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -27,6 +28,47 @@ from sqlalchemy.orm import declarative_base, sessionmaker, Session
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "changeme-super-secret-key-for-jwt-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+# Rate limit de login por usuario: mismo umbral que la regla 'fuerza-bruta-login'
+# del Analysis Service (5 intentos fallidos en 60s), para que el bloqueo llegue
+# justo cuando esa alerta se dispara. Ventana deslizante en memoria, por
+# username — no bloquea a otros usuarios si alguien prueba varias cuentas.
+LOGIN_RATE_LIMIT_ATTEMPTS = 5
+LOGIN_RATE_LIMIT_WINDOW_SECONDS = 60
+LOGIN_RATE_LIMIT_BLOCK_SECONDS = 60
+_login_failures: dict[str, deque] = defaultdict(deque)
+_login_blocked_until: dict[str, float] = {}
+
+
+def _check_login_rate_limit(username: str):
+    """Lanza 429 si el usuario está bloqueado por exceso de intentos fallidos."""
+    blocked_until = _login_blocked_until.get(username)
+    if blocked_until and time.time() < blocked_until:
+        retry_after = round(blocked_until - time.time())
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Demasiados intentos fallidos. Intenta de nuevo en {retry_after} segundos.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
+def _register_login_failure(username: str) -> bool:
+    """Registra un fallo de login; devuelve True si esto dispara el bloqueo."""
+    now = time.time()
+    window = _login_failures[username]
+    window.append(now)
+    while window and now - window[0] > LOGIN_RATE_LIMIT_WINDOW_SECONDS:
+        window.popleft()
+    if len(window) >= LOGIN_RATE_LIMIT_ATTEMPTS:
+        _login_blocked_until[username] = now + LOGIN_RATE_LIMIT_BLOCK_SECONDS
+        window.clear()
+        return True
+    return False
+
+
+def _clear_login_failures(username: str):
+    _login_failures.pop(username, None)
+    _login_blocked_until.pop(username, None)
 LOG_SERVICE_URL = os.getenv("LOG_SERVICE_URL", "http://localhost:8010")
 CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")]
 
@@ -587,6 +629,7 @@ def register(user_data: UserCreate, background_tasks: BackgroundTasks, db: Sessi
     summary="Iniciar sesión — obtener token JWT",
     responses={
         401: {"description": "Credenciales inválidas", "content": {"application/json": {"example": {"detail": "Usuario o contraseña incorrectos."}}}},
+        429: {"description": "Demasiados intentos fallidos", "content": {"application/json": {"example": {"detail": "Demasiados intentos fallidos. Intenta de nuevo en 60 segundos."}}}},
     },
 )
 def login(
@@ -605,18 +648,28 @@ def login(
     Usa el token resultante en el botón **Authorize** de Swagger o como header:
     `Authorization: Bearer <token>`
 
+    Tras 5 intentos fallidos en 60 segundos para el mismo usuario, el login queda
+    bloqueado 60 segundos (`429 Too Many Requests`) — mismo umbral que la alerta
+    de fuerza bruta del Analysis Service.
+
     Credenciales de demo: `admin` / `admin123`.
     """
+    _check_login_rate_limit(form_data.username)
+
     user = db.query(UserORM).filter(UserORM.username == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
+        blocked = _register_login_failure(form_data.username)
         # Llamada directa (no add_task): las BackgroundTasks se descartan al
         # lanzar HTTPException, así que el evento nunca llegaría al Log Service.
         send_log("WARNING", f"Intento de inicio de sesión fallido para el usuario: '{form_data.username}'")
+        if blocked:
+            send_log("ERROR", f"Usuario '{form_data.username}' bloqueado temporalmente por exceso de intentos fallidos de inicio de sesión.")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Usuario o contraseña incorrectos.",
             headers={"WWW-Authenticate": "Bearer"}
         )
+    _clear_login_failures(form_data.username)
     token = create_access_token({"sub": user.username, "role": user.role})
     background_tasks.add_task(send_log, "INFO", f"Inicio de sesión exitoso para el usuario: '{user.username}' con rol '{user.role}'")
     return {"access_token": token, "token_type": "bearer"}

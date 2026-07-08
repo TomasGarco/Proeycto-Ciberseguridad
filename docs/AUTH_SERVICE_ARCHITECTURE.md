@@ -73,6 +73,8 @@ from jose import jwt, JWTError
 | `SECRET_KEY` | variable de entorno | `JWT_SECRET_KEY` | `changeme-super-secret-key-for-jwt-in-production` |
 | `ALGORITHM` | **hardcoded en el código** | - | `HS256` |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | **hardcoded en el código** | - | `60` |
+| `LOGIN_RATE_LIMIT_WINDOW_SECONDS` | **hardcoded en el código** | - | `60` |
+| `LOGIN_RATE_LIMIT_BLOCK_SECONDS` | **hardcoded en el código** | - | `60` |
 | `LOG_SERVICE_URL` | variable de entorno | `LOG_SERVICE_URL` | `http://localhost:8010` |
 | `POSTGRES_HOST` | variable de entorno | `POSTGRES_HOST` | `None` |
 | `POSTGRES_PORT` | variable de entorno | `POSTGRES_PORT` | `5432` |
