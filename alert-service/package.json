@@ -1,12 +1,14 @@
 {
   "name": "alert-service",
-  "version": "0.1.0",
-  "description": "Placeholder del Alert Service (SOC/SIEM). Solo expone /api/health por ahora — la persistencia de alertas y el ciclo de vida de incidentes llegan en la Semana 8+.",
+  "version": "1.0.0",
+  "description": "Alert Service (SOC/SIEM): consume alertas desde RabbitMQ (exchange alerts_events), las persiste en PostgreSQL (alerts_db) y expone una API REST de consulta y ciclo de vida (nueva/reconocida/cerrada).",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "express": "^4.19.2"
+    "amqplib": "^0.10.4",
+    "express": "^4.19.2",
+    "pg": "^8.12.0"
   }
 }

@@ -71,4 +71,24 @@ export async function fetchRecentEvents(limit = 20) {
   return data;
 }
 
+// --- Alert Service ---
+
+export async function fetchAlerts({ limit = 100, severity = "", status = "" } = {}) {
+  const params = { limit };
+  if (severity) params.severity = severity;
+  if (status) params.status = status;
+  const { data } = await api.get("/api/alerts", { params });
+  return data;
+}
+
+export async function fetchAlertStats() {
+  const { data } = await api.get("/api/alerts/stats");
+  return data;
+}
+
+export async function updateAlertStatus(id, status) {
+  const { data } = await api.patch(`/api/alerts/${id}`, { status });
+  return data;
+}
+
 export default api;

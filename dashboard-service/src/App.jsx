@@ -91,7 +91,7 @@ export default function App() {
       </main>
 
       <footer className="footer muted">
-        Auth Service :8000 · Log Service :8010 · Analysis Service :8002 · RabbitMQ :15672
+        Auth Service :8000 · Log Service :8010 · Analysis Service :8002 · Alert Service :8003 · RabbitMQ :15672
       </footer>
     </div>
   );

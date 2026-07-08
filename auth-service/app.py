@@ -562,7 +562,9 @@ def register(user_data: UserCreate, background_tasks: BackgroundTasks, db: Sessi
     if db.query(UserORM).filter(
         (UserORM.username == user_data.username) | (UserORM.email == user_data.email)
     ).first():
-        background_tasks.add_task(send_log, "WARNING", f"Intento de registro fallido: el usuario o email '{user_data.username}/{user_data.email}' ya existe.")
+        # Llamada directa (no add_task): las BackgroundTasks se descartan al
+        # lanzar HTTPException, así que el evento nunca llegaría al Log Service.
+        send_log("WARNING", f"Intento de registro fallido: el usuario o email '{user_data.username}/{user_data.email}' ya existe.")
         raise HTTPException(status_code=400, detail="El usuario o email ya existe.")
 
     user = UserORM(
@@ -607,7 +609,9 @@ def login(
     """
     user = db.query(UserORM).filter(UserORM.username == form_data.username).first()
     if not user or not verify_password(form_data.password, user.hashed_password):
-        background_tasks.add_task(send_log, "WARNING", f"Intento de inicio de sesión fallido para el usuario: '{form_data.username}'")
+        # Llamada directa (no add_task): las BackgroundTasks se descartan al
+        # lanzar HTTPException, así que el evento nunca llegaría al Log Service.
+        send_log("WARNING", f"Intento de inicio de sesión fallido para el usuario: '{form_data.username}'")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Usuario o contraseña incorrectos.",
@@ -657,7 +661,9 @@ def change_password(
     este endpoint no los revoca.
     """
     if not verify_password(data.current_password, current_user.hashed_password):
-        background_tasks.add_task(send_log, "WARNING", f"Intento fallido de cambio de contraseña para '{current_user.username}': contraseña actual incorrecta.")
+        # Llamada directa (no add_task): las BackgroundTasks se descartan al
+        # lanzar HTTPException, así que el evento nunca llegaría al Log Service.
+        send_log("WARNING", f"Intento fallido de cambio de contraseña para '{current_user.username}': contraseña actual incorrecta.")
         raise HTTPException(status_code=400, detail="La contraseña actual es incorrecta.")
 
     current_user.hashed_password = hash_password(data.new_password)

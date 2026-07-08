@@ -328,6 +328,23 @@ td.mono {
 .badge.error   { color: var(--critical); background: rgba(208, 59, 59, 0.12); }
 .badge.debug   { color: var(--accent);   background: var(--accent-soft); }
 .badge.neutral { color: var(--muted);    background: rgba(137, 135, 129, 0.12); }
+/* Severidad crítica: fondo sólido para distinguirla de "alta" (error) */
+.badge.critical { color: #fff; background: var(--critical); }
+
+/* Botones compactos para acciones dentro de una fila de tabla */
+button.btn.small {
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  border-radius: 6px;
+}
+
+td.actions-cell {
+  white-space: nowrap;
+}
+
+td.actions-cell .btn + .btn {
+  margin-left: 6px;
+}
 
 /* ---- Login / Registro ---- */
 .login-bg {

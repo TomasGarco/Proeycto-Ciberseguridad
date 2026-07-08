@@ -2,7 +2,7 @@
 
 # Plataforma SOC/SIEM: Microservicios con Docker Compose
 
-Arquitectura de microservicios independiente, estructurada en un monorepo. Consta de cuatro servicios de aplicación: **Auth Service** (autenticación JWT, items y dashboard embebido), **Log Service** (recolector centralizado de logs con persistencia en MongoDB), **Analysis Service** (consumidor de eventos vía RabbitMQ con estadísticas agregadas) y **Dashboard Service** (frontend React servido por nginx). Todo orquestado con **Docker Compose** junto a **PostgreSQL**, **MongoDB** y **RabbitMQ**.
+Arquitectura de microservicios independiente, estructurada en un monorepo. Consta de cinco servicios de aplicación: **Auth Service** (autenticación JWT, items y dashboard embebido), **Log Service** (recolector centralizado de logs con persistencia en MongoDB), **Analysis Service** (consumidor de eventos vía RabbitMQ con motor de reglas de detección y estadísticas agregadas), **Alert Service** (persistencia y ciclo de vida de alertas en PostgreSQL) y **Dashboard Service** (frontend React servido por nginx). Todo orquestado con **Docker Compose** junto a **PostgreSQL**, **MongoDB** y **RabbitMQ**.
 
 ---
 
@@ -26,23 +26,26 @@ graph TD
     Dash -->|/api/auth/*| Auth[Auth Service]
     Dash -->|/api/logs| LogServ[Log Service]
     Dash -->|/api/analysis/*| Analysis[Analysis Service]
-    Dash -->|/api/alerts/*| AlertServ[Alert Service placeholder]
+    Dash -->|/api/alerts| AlertServ[Alert Service]
     Auth -->|HTTP POST /logs BackgroundTasks| LogServ
     Auth -->|SQLAlchemy| PG[(PostgreSQL: auth_db + items_db)]
     LogServ -->|PyMongo| Mongo[(MongoDB: logs_db.logs)]
     LogServ -->|publica logs_events| MQ{{RabbitMQ}}
     MQ -->|consume analysis_queue| Analysis
+    Analysis -->|publica alerts_events| MQ
+    MQ -->|consume alerts_queue| AlertServ
+    AlertServ -->|pg| PGA[(PostgreSQL: alerts_db)]
 ```
 
 **Características principales**
 - **Dashboard Service (puerto 3000) — dashboard principal del proyecto:** frontend en React (Vite + Recharts + Axios) servido por nginx, que además actúa como reverse proxy hacia los demás servicios (un solo origen, sin CORS). Login y registro con validación en vivo de requisitos de cuenta/contraseña, notificaciones toast, tabla de logs en vivo con filtros, estadísticas con gráficos y gestión de usuarios para el rol `admin`. Este es el punto de entrada de la plataforma desde la Semana 7.
 - **Auth Service (puerto 8000):** API REST principal + dashboard embebido (anterior al de React; se mantiene como consola secundaria de administración de items). Gestiona registros, logins, JWT y productos. Envía logs de forma asíncrona al Log Service.
 - **Log Service (puerto 8010):** Recolector de logs y consola web. Persiste cada evento en MongoDB y lo publica en RabbitMQ (exchange topic `logs_events`, routing key `logs.<nivel>`).
-- **Analysis Service (puerto 8002):** consume los eventos de la cola `analysis_queue` (binding `logs.#`) en un hilo dedicado y expone estadísticas agregadas (`/stats`, `/events/recent`). El motor de reglas de detección llega en la Semana 8.
-- **Alert Service (puerto 8003) — placeholder:** esqueleto Node.js/Express con solo `GET /api/health`. Sin persistencia, sin conexión a RabbitMQ ni lógica de severidad todavía — la tubería (`docker-compose.yml`, proxy `/api/alerts/*` en nginx) ya está lista para cuando se implemente en la Semana 8+. `AlertsPage.jsx` en el dashboard sigue siendo un placeholder estático.
-- **RabbitMQ (puerto 15672 expuesto; AMQP 5672 solo red interna):** broker de mensajería para la comunicación asíncrona entre Log Service y Analysis Service. UI de gestión en `http://localhost:15672` (ver `.env` para credenciales).
+- **Analysis Service (puerto 8002):** consume los eventos de la cola `analysis_queue` (binding `logs.#`) en un hilo dedicado, les aplica el **motor de reglas de detección** (umbral, patrón regex y palabra clave — Semana 8) y publica cada alerta disparada en el exchange `alerts_events` con routing key `alerts.<severidad>`. Expone estadísticas agregadas (`/stats`, `/events/recent`) y la lista de reglas (`/rules`).
+- **Alert Service (puerto 8003):** servicio Node.js/Express que consume las alertas de la cola `alerts_queue` (binding `alerts.#`), las **persiste en PostgreSQL** (`alerts_db.alerts`) y expone su API de consulta y ciclo de vida: `GET /alerts` (filtros por severidad/estado), `GET /alerts/stats` y `PATCH /alerts/:id` (nueva → reconocida → cerrada). Severidades: baja, media, alta, crítica.
+- **RabbitMQ (puerto 15672 expuesto; AMQP 5672 solo red interna):** broker de mensajería para la comunicación asíncrona Log Service → Analysis Service (`logs_events`) y Analysis Service → Alert Service (`alerts_events`). UI de gestión en `http://localhost:15672` (ver `.env` para credenciales).
 - **MongoDB (puerto 27017, solo red interna):** almacena los logs en la base `logs_db`, colección `logs`. Log Service espera activamente (`_wait_for_mongodb`, hasta 15 reintentos) a que MongoDB acepte conexiones antes de arrancar.
-- **PostgreSQL (puerto 5432, solo red interna):** un único servidor Postgres con dos bases de datos aisladas (`auth_db`, `items_db`), creadas automáticamente vía script de inicialización (`postgres-init/`). Si no hay servidor Postgres disponible, Auth Service cae automáticamente a SQLite local (`data/auth.db` / `data/items.db`) — útil para desarrollo sin Docker.
+- **PostgreSQL (puerto 5432, solo red interna):** un único servidor Postgres con tres bases de datos aisladas (`auth_db`, `items_db`, `alerts_db`), creadas automáticamente vía script de inicialización (`postgres-init/`); si el volumen ya existía antes de la Semana 8, Alert Service crea `alerts_db` por sí mismo al arrancar. Si no hay servidor Postgres disponible, Auth Service cae automáticamente a SQLite local (`data/auth.db` / `data/items.db`) — útil para desarrollo sin Docker.
 - **Comunicación no bloqueante:** el Auth Service utiliza `BackgroundTasks` de FastAPI y un cliente HTTP (`requests`) para reportar eventos al Log Service sin penalizar la respuesta al cliente; el Log Service desacopla el análisis publicando a RabbitMQ.
 
 ---
@@ -75,13 +78,13 @@ python-docker-service/
 │   ├── vite.config.js      Build con Vite (+ proxy de desarrollo)
 │   └── Dockerfile          Build multi-stage: node → nginx
 │
-├── alert-service/          Placeholder del Alert Service (Node.js/Express)
-│   ├── index.js            Solo expone GET /api/health por ahora
-│   ├── package.json        Dependencias (Express)
+├── alert-service/          Microservicio de gestión de alertas (Node.js/Express)
+│   ├── index.js            Consumidor RabbitMQ + persistencia Postgres + API REST
+│   ├── package.json        Dependencias (Express, pg, amqplib)
 │   └── Dockerfile          Imagen Docker del Alert Service
 │
 ├── postgres-init/          Scripts SQL ejecutados al primer arranque de Postgres
-│   └── 01-create-databases.sql   Crea auth_db e items_db
+│   └── 01-create-databases.sql   Crea auth_db, items_db y alerts_db
 │
 ├── docker-compose.yml      Orquestación de contenedores, red y volúmenes
 ├── .env.example            Plantilla de variables de entorno/credenciales (copiar a .env)
@@ -139,7 +142,7 @@ Los tres puertos marcados "solo red interna" no son alcanzables desde `localhost
 
 **Qué es:** el frontend del proyecto — lo primero que ve cualquier usuario. Es una SPA en React (Vite + Recharts + Axios) compilada a estático y servida por nginx.
 
-**Qué se implementa aquí:** login/registro con validación en vivo, tabla de logs en tiempo real con filtros, gráficos de estadísticas, gestión de usuarios (solo rol `admin`), y una vista de Alertas todavía en placeholder. nginx además hace de **reverse proxy**: todas las llamadas del navegador van a `/api/*` en este mismo origen, y nginx las reenvía internamente a auth-service, log-service, analysis-service y alert-service — así el navegador nunca le habla directo a los otros puertos y no hay problemas de CORS entre pestañas.
+**Qué se implementa aquí:** login/registro con validación en vivo, tabla de logs en tiempo real con filtros, gráficos de estadísticas, gestión de usuarios (solo rol `admin`), y una vista de Alertas en vivo con filtros por severidad/estado y botones de ciclo de vida (Reconocer / Cerrar). nginx además hace de **reverse proxy**: todas las llamadas del navegador van a `/api/*` en este mismo origen, y nginx las reenvía internamente a auth-service, log-service, analysis-service y alert-service — así el navegador nunca le habla directo a los otros puertos y no hay problemas de CORS entre pestañas.
 
 **Por qué existe / cómo aporta:** sin esto, el proyecto sería solo APIs sueltas sin forma de demostrarlas. Es la pieza que convierte 5 microservicios backend en "un producto" que se puede mostrar y usar.
 
@@ -163,23 +166,23 @@ Los tres puertos marcados "solo red interna" no son alcanzables desde `localhost
 
 **Qué es:** el consumidor de eventos — FastAPI corriendo un hilo consumidor de RabbitMQ en paralelo al servidor web.
 
-**Qué se implementa aquí:** un hilo dedicado consume la cola `analysis_queue` (todo lo publicado bajo `logs.#`) y mantiene contadores en memoria — total de eventos, por nivel, por servicio, últimos eventos recientes. Expone `/stats` y `/events/recent`.
+**Qué se implementa aquí:** un hilo dedicado consume la cola `analysis_queue` (todo lo publicado bajo `logs.#`), mantiene contadores en memoria (total de eventos, por nivel, por servicio, últimos eventos) y le aplica a cada evento el **motor de reglas de detección** (Semana 8): reglas de umbral (N eventos coincidentes en una ventana de tiempo — p. ej. 5 logins fallidos en 60 s → posible fuerza bruta), de patrón regex (p. ej. token JWT manipulado, intentos de inyección) y de palabra clave (p. ej. accesos denegados). Cada alerta disparada lleva severidad (`baja`/`media`/`alta`/`critica`) y se publica en el exchange `alerts_events` con routing key `alerts.<severidad>`. Expone `/stats`, `/events/recent` y `/rules`.
 
-**Por qué existe / cómo aporta:** es el paso intermedio entre "tener logs guardados" y "tener alertas de seguridad" — hoy solo cuenta y agrupa, pero es donde va a vivir el motor de reglas de detección (umbral, patrón, palabra clave) que falta por construir. Sin este servicio, el SIEM no tendría ningún tipo de análisis, solo un histórico de logs sin procesar.
+**Por qué existe / cómo aporta:** es el paso intermedio entre "tener logs guardados" y "tener alertas de seguridad" — el corazón analítico del SIEM. Decide qué eventos son ruido y cuáles merecen una alerta con severidad; sin él, el sistema solo tendría un histórico de logs sin procesar.
 
-#### `:8003` — Alert Service *(placeholder)*
+#### `:8003` — Alert Service
 
-**Qué es:** el futuro gestor del ciclo de vida de alertas — hoy es un esqueleto Node.js/Express con un único endpoint (`GET /api/health`).
+**Qué es:** el gestor del ciclo de vida de alertas — Node.js/Express + PostgreSQL + RabbitMQ (el único servicio de aplicación que no es Python/React, a propósito, para practicar un stack políglota).
 
-**Qué se implementa aquí (por ahora):** nada de lógica de negocio todavía — ni persistencia, ni conexión a RabbitMQ, ni niveles de severidad. Lo que sí existe es la tubería lista: entrada en `docker-compose.yml`, ruta `/api/alerts/*` ya enrutada en nginx, y la pestaña "Alertas" del dashboard ya apuntando ahí (aunque hoy solo muestra un placeholder).
+**Qué se implementa aquí:** un consumidor amqplib lee la cola `alerts_queue` (binding `alerts.#`) y persiste cada alerta en PostgreSQL (`alerts_db.alerts`, con el evento original en una columna JSONB). Sobre esa tabla expone la API de gestión: `GET /alerts` con filtros por severidad y estado, `GET /alerts/stats` con conteos agregados, y `PATCH /alerts/:id` para el ciclo de vida del incidente (nueva → reconocida → cerrada). Al arrancar crea `alerts_db` y la tabla por sí mismo si no existen.
 
-**Por qué existe / cómo aporta:** se dejó preparado a propósito para que, cuando se implemente la lógica real, no haga falta tocar Docker, nginx ni el frontend — solo escribir la lógica de negocio dentro de este servicio. Es la pieza que le falta al proyecto para cumplir el objetivo final: "ver alertas activas con su severidad" desde el dashboard.
+**Por qué existe / cómo aporta:** las alertas del Analysis Service serían efímeras (se perderían al reiniciar) — este servicio las convierte en incidentes persistentes y gestionables, que es justo el objetivo final del proyecto: "ver alertas activas con su severidad" desde el dashboard y poder cerrarlas.
 
 #### `:15672` / `:5672` — RabbitMQ
 
-**Qué es:** el broker de mensajería — el "cartero" que desacopla Log Service de Analysis Service.
+**Qué es:** el broker de mensajería — el "cartero" que desacopla los dos tramos asíncronos: Log Service → Analysis Service y Analysis Service → Alert Service.
 
-**Qué se implementa aquí:** Log Service publica cada evento nuevo a un exchange (`logs_events`); Analysis Service (y en el futuro, Alert Service) se suscriben a esa cola sin que Log Service necesite saber quién los está escuchando. `:15672` es la interfaz web de administración (ver colas, mensajes, exchanges); `:5672` es el protocolo real (AMQP) que usan los servicios entre sí, por eso no necesita estar expuesto al host.
+**Qué se implementa aquí:** Log Service publica cada evento nuevo al exchange `logs_events` (lo consume Analysis Service vía `analysis_queue`); Analysis Service publica cada alerta disparada al exchange `alerts_events` (lo consume Alert Service vía `alerts_queue`) — en ambos casos el publicador no necesita saber quién escucha. `:15672` es la interfaz web de administración (ver colas, mensajes, exchanges); `:5672` es el protocolo real (AMQP) que usan los servicios entre sí, por eso no necesita estar expuesto al host.
 
 **Por qué existe / cómo aporta:** es lo que permite que Log Service siga funcionando aunque Analysis Service esté caído (o viceversa) — comunicación asíncrona en vez de llamadas directas que fallarían en cadena. Es la pieza que hace que la arquitectura sea de microservicios de verdad, y no solo varios servicios que se llaman entre sí por HTTP.
 
@@ -187,7 +190,7 @@ Los tres puertos marcados "solo red interna" no son alcanzables desde `localhost
 
 **Qué es:** la base de datos relacional del proyecto — usuarios y datos estructurados.
 
-**Qué se implementa aquí:** dos bases lógicas separadas en el mismo servidor: `auth_db` (usuarios, contraseñas hasheadas, roles) e `items_db` (el CRUD de ejemplo). Se crean automáticamente al primer arranque vía `postgres-init/`.
+**Qué se implementa aquí:** tres bases lógicas separadas en el mismo servidor: `auth_db` (usuarios, contraseñas hasheadas, roles), `items_db` (el CRUD de ejemplo) y `alerts_db` (las alertas del SIEM con su estado). Las dos primeras se crean al primer arranque vía `postgres-init/`; `alerts_db` también, o la crea Alert Service al arrancar si el volumen es anterior a la Semana 8.
 
 **Por qué existe / cómo aporta:** los datos de usuarios necesitan integridad transaccional (que un registro no quede a medias, que los roles no se dupliquen) — por eso son relacionales y no van en Mongo junto con los logs. Si Postgres no está disponible, Auth Service cae automáticamente a SQLite local, lo que permite desarrollar sin tener Docker corriendo.
 

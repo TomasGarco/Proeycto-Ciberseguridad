@@ -23,6 +23,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/analysis/, ""),
       },
+      "/api/alerts": {
+        target: "http://localhost:8003",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/alerts/, "/alerts"),
+      },
     },
   },
 });
