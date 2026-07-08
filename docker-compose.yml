@@ -93,9 +93,13 @@ services:
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=${RABBITMQ_DEFAULT_USER:-guest}
       - RABBITMQ_PASSWORD=${RABBITMQ_DEFAULT_PASS:-guest}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/api/health')"]
@@ -169,6 +173,23 @@ services:
       timeout: 10s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    # AOF activado para que los contadores del Analysis Service sobrevivan
+    # reinicios del contenedor de Redis, no solo del servicio.
+    command: ["redis-server", "--appendonly", "yes"]
+    # Sin mapeo a host: solo lo consume analysis-service en la red interna de
+    # Docker. Para inspección manual usar "docker exec redis redis-cli ...".
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   mongodb:
     image: mongo:7
     container_name: mongodb
@@ -192,4 +213,6 @@ volumes:
   mongo_data:
     driver: local
   rabbitmq_data:
+    driver: local
+  redis_data:
     driver: local

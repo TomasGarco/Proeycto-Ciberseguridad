@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import List
 
 import pika
+import redis
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -18,6 +19,10 @@ RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
 RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", "5672"))
 RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
 RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "guest")
+# Sin REDIS_HOST el servicio funciona solo en memoria — mismo patrón de
+# fallback que POSTGRES_HOST en auth-service y RABBITMQ_HOST en log-service.
+REDIS_HOST = os.getenv("REDIS_HOST")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")]
 
 LOGS_EXCHANGE = "logs_events"
@@ -146,6 +151,8 @@ def _evaluate_event(event: dict) -> List[dict]:
 
 
 # Estado en memoria del análisis: contadores agregados + últimos eventos.
+# Con Redis configurado (Semana 9) cada evento se espeja allí (write-through)
+# y al arrancar se restauran los valores — /stats sobrevive reinicios.
 _stats_lock = threading.Lock()
 _stats = {
     "total_eventos": 0,
@@ -158,6 +165,76 @@ _stats = {
 _recent_events = deque(maxlen=50)
 _started_at = datetime.now().isoformat()
 _start_time = time.time()
+
+# --- Redis (Semana 9): caché/persistencia de contadores y últimos eventos ---
+_redis = None
+
+
+def _connect_redis(retries: int = 5, delay_seconds: float = 2.0):
+    client = redis.Redis(
+        host=REDIS_HOST, port=REDIS_PORT, decode_responses=True,
+        socket_connect_timeout=3, socket_timeout=3,
+    )
+    for attempt in range(1, retries + 1):
+        try:
+            client.ping()
+            print(f"[REDIS] Conectado a Redis en {REDIS_HOST}:{REDIS_PORT}")
+            return client
+        except redis.exceptions.RedisError as e:
+            if attempt == retries:
+                print(f"[REDIS] Sin conexión tras {retries} intentos ({e}) — contadores solo en memoria.")
+                return None
+            print(f"[REDIS] Esperando a Redis... (intento {attempt}/{retries})")
+            time.sleep(delay_seconds)
+
+
+def _restore_stats_from_redis():
+    """Recarga contadores y eventos recientes persistidos en Redis al arrancar."""
+    with _stats_lock:
+        _stats["total_eventos"] = int(_redis.get("analysis:total_eventos") or 0)
+        _stats["por_nivel"] = Counter({k: int(v) for k, v in _redis.hgetall("analysis:por_nivel").items()})
+        _stats["por_servicio"] = Counter({k: int(v) for k, v in _redis.hgetall("analysis:por_servicio").items()})
+        _stats["ultimo_evento_en"] = _redis.get("analysis:ultimo_evento_en")
+        _stats["alertas_generadas"] = int(_redis.get("analysis:alertas_generadas") or 0)
+        _stats["alertas_por_severidad"] = Counter(
+            {k: int(v) for k, v in _redis.hgetall("analysis:alertas_por_severidad").items()}
+        )
+        # lrange devuelve del más reciente al más antiguo (LPUSH); se invierte
+        # para que el deque quede en orden de llegada, como en _on_message.
+        for raw in reversed(_redis.lrange("analysis:eventos_recientes", 0, _recent_events.maxlen - 1)):
+            try:
+                _recent_events.append(json.loads(raw))
+            except json.JSONDecodeError:
+                continue
+    if _stats["total_eventos"]:
+        print(f"[REDIS] Contadores restaurados: {_stats['total_eventos']} eventos, {_stats['alertas_generadas']} alertas.")
+
+
+def _persist_event_to_redis(event: dict, level: str, service: str, alerts: List[dict], timestamp: str):
+    """Espejo en Redis de lo que _on_message acumula en memoria (write-through)."""
+    if _redis is None:
+        return
+    try:
+        pipe = _redis.pipeline()
+        pipe.incr("analysis:total_eventos")
+        pipe.hincrby("analysis:por_nivel", level, 1)
+        pipe.hincrby("analysis:por_servicio", service, 1)
+        pipe.set("analysis:ultimo_evento_en", timestamp)
+        pipe.lpush("analysis:eventos_recientes", json.dumps(event, ensure_ascii=False))
+        pipe.ltrim("analysis:eventos_recientes", 0, _recent_events.maxlen - 1)
+        if alerts:
+            pipe.incrby("analysis:alertas_generadas", len(alerts))
+            for alert in alerts:
+                pipe.hincrby("analysis:alertas_por_severidad", alert["severity"], 1)
+        pipe.execute()
+    except redis.exceptions.RedisError as e:
+        print(f"[REDIS] No se pudo persistir el evento ({e}) — el contador en memoria sigue al día.")
+
+
+if REDIS_HOST:
+    _redis = _connect_redis()
+    if _redis is not None:
+        _restore_stats_from_redis()
 
 
 def _wait_for_rabbitmq(retries: int = 15, delay_seconds: float = 2.0) -> pika.BlockingConnection:
@@ -196,6 +273,7 @@ def _on_message(channel, method, properties, body):
 
     level = str(event.get("level", "UNKNOWN")).upper()
     service = str(event.get("service", "unknown")).lower()
+    received_at = datetime.now().isoformat()
 
     alerts = _evaluate_event(event)
     for alert in alerts:
@@ -211,11 +289,13 @@ def _on_message(channel, method, properties, body):
         _stats["total_eventos"] += 1
         _stats["por_nivel"][level] += 1
         _stats["por_servicio"][service] += 1
-        _stats["ultimo_evento_en"] = datetime.now().isoformat()
+        _stats["ultimo_evento_en"] = received_at
         _recent_events.append(event)
         _stats["alertas_generadas"] += len(alerts)
         for alert in alerts:
             _stats["alertas_por_severidad"][alert["severity"]] += 1
+
+    _persist_event_to_redis(event, level, service, alerts, received_at)
 
     print(f"[ANALYSIS] Evento consumido ({method.routing_key}): [{service}] [{level}] {event.get('message', '')}")
     channel.basic_ack(delivery_tag=method.delivery_tag)
@@ -250,9 +330,9 @@ app = FastAPI(
     description=(
         "Microservicio de análisis de eventos: consume logs desde RabbitMQ, aplica reglas de "
         "detección (umbral, patrón, palabra clave), publica alertas con severidad y expone "
-        "estadísticas agregadas."
+        "estadísticas agregadas persistidas en Redis."
     ),
-    version="2.0.0",
+    version="2.1.0",
 )
 
 app.add_middleware(
@@ -299,6 +379,7 @@ def get_stats():
             "ultimo_evento_en": _stats["ultimo_evento_en"],
             "alertas_generadas": _stats["alertas_generadas"],
             "alertas_por_severidad": dict(_stats["alertas_por_severidad"]),
+            "persistencia": "redis" if _redis is not None else "memoria",
             "iniciado_en": _started_at,
         }
 

@@ -8,7 +8,7 @@
 
 ## 1. El elevator pitch (30 segundos)
 
-> "Es una plataforma SOC/SIEM — un sistema de monitoreo de seguridad que recolecta logs, los analiza y genera alertas. Son 5 microservicios en 8 contenedores Docker: autenticación con JWT y roles (FastAPI + PostgreSQL), recolección de logs (FastAPI + MongoDB), análisis con un motor de reglas de detección que evalúa severidad (umbral, patrón, palabra clave), gestión de alertas con ciclo de vida de incidentes (Node.js + PostgreSQL) y un dashboard en React. Los servicios se comunican de forma asíncrona por RabbitMQ. Cubre las Semanas 1 a 8 de un roadmap de 10; lo que falta es Redis como capa de caché."
+> "Es una plataforma SOC/SIEM — un sistema de monitoreo de seguridad que recolecta logs, los analiza y genera alertas. Son 5 microservicios en 8 contenedores Docker: autenticación con JWT y roles (FastAPI + PostgreSQL), recolección de logs (FastAPI + MongoDB), análisis con un motor de reglas de detección que evalúa severidad (umbral, patrón, palabra clave), gestión de alertas con ciclo de vida de incidentes (Node.js + PostgreSQL) y un dashboard en React. Los servicios se comunican de forma asíncrona por RabbitMQ y Redis actúa como capa de caché de las estadísticas. La arquitectura objetivo del roadmap está completa."
 
 ## 2. Qué es un SOC/SIEM (el contexto de negocio)
 
@@ -26,11 +26,11 @@ La comunicación es asíncrona en dos tramos vía RabbitMQ: Log Service publica 
 
 ## 4. El roadmap de 10 semanas — qué está hecho y qué no
 
-Semanas 1–8 completadas: autenticación JWT con roles (1–3), persistencia PostgreSQL y MongoDB (4–5), mensajería RabbitMQ (6), dashboard React (7), motor de reglas de detección + Alert Service con ciclo de vida de incidentes (8). Pendiente: Redis como capa de caché (Semana 9+).
+Semanas 1–9 completadas: autenticación JWT con roles (1–3), persistencia PostgreSQL y MongoDB (4–5), mensajería RabbitMQ (6), dashboard React (7), motor de reglas de detección + Alert Service con ciclo de vida de incidentes (8), Redis como capa de caché de estadísticas (9). Lo que queda por delante son refinamientos, no piezas de arquitectura.
 
-## 5. La arquitectura final (a la que se llega en la Semana 9)
+## 5. La arquitectura final (completa)
 
-Los 5 microservicios ya existen y están conectados — Auth (FastAPI), Log (FastAPI), **Analysis** (Python, motor de reglas), **Alert** (Node.js/Express), **Dashboard** (React) — sobre PostgreSQL + MongoDB + RabbitMQ. La única pieza de infraestructura que falta del diagrama objetivo es **Redis** (caché del Analysis Service). Diagrama completo: **[`README.md`](../README.md)** sección "Diseño y Arquitectura".
+Los 5 microservicios existen y están conectados — Auth (FastAPI), Log (FastAPI), **Analysis** (Python, motor de reglas), **Alert** (Node.js/Express), **Dashboard** (React) — sobre PostgreSQL + MongoDB + RabbitMQ + Redis. Es la arquitectura objetivo del roadmap, sin piezas pendientes. Diagrama completo: **[`README.md`](../README.md)** sección "Diseño y Arquitectura".
 
 ## 6. Cómo explicar el flujo técnico (para una demo en vivo)
 
@@ -64,7 +64,7 @@ Cada comando de Docker Compose, cada script (`run_local.bat`, `test_crud.py`) y 
 | "¿Cómo se protege la contraseña?" | `docs/AUTH_SERVICE_ARCHITECTURE.md` → `hash_password()` (bcrypt, nunca texto plano) |
 | "¿Qué pasa si el token expira?" | `docs/WEEKS_1-2_IMPLEMENTATION.md` → "Token expired" en Troubleshooting |
 | "¿Por qué colas de mensajes y no HTTP entre servicios?" | Este documento, sección 3, y `README.md` → sección de RabbitMQ (desacople: un servicio caído no tumba a los demás) |
-| "¿Qué le falta al proyecto para estar completo?" | Este documento, secciones 4 y 5 (solo Redis) |
+| "¿Qué le falta al proyecto para estar completo?" | Este documento, secciones 4 y 5 (la arquitectura está completa; lo excluido a propósito —ML, cloud, SOAR— está en el alcance del proyecto) |
 | "¿Cómo se controla qué puede hacer un admin vs un user?" | `docs/ARCHITECTURE_VISUAL_GUIDE.md` → sección 5 (RBAC) |
 | "¿Cómo pruebo la API sin escribir código?" | `docs/WEEKS_1-2_IMPLEMENTATION.md` → "Testing Endpoints" (Swagger UI en `/docs`) |
 | "¿Qué hace exactamente cada comando/script del proyecto?" | `docs/WEEKS_1-2_IMPLEMENTATION.md` → "Command & Script Reference" |
