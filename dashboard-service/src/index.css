@@ -313,6 +313,26 @@ td.mono {
   color: var(--muted);
 }
 
+th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+th.sortable:hover { color: var(--text); }
+
+tr.detail-row td {
+  background: var(--surface-2);
+  white-space: normal;
+}
+
+tr.detail-row pre {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* ---- Badges de nivel / severidad ---- */
 .badge {
   display: inline-block;
@@ -464,6 +484,44 @@ td.actions-cell .btn + .btn {
 .error-msg {
   color: var(--critical);
   font-size: 0.82rem;
+}
+
+.field-error {
+  color: var(--critical);
+  font-size: 0.74rem;
+}
+
+/* Campo de contraseña con botón de mostrar/ocultar superpuesto */
+.pass-field {
+  position: relative;
+  display: block;
+}
+
+.pass-field input {
+  width: 100%;
+  padding-right: 36px;
+}
+
+.pass-toggle {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  padding: 4px;
+  display: flex;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.pass-toggle:hover {
+  color: var(--text);
+}
+
+.pass-toggle svg {
+  width: 16px;
+  height: 16px;
 }
 
 /* ---- Toasts (notificaciones no bloqueantes) ---- */

@@ -28,6 +28,10 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/alerts/, "/alerts"),
       },
+      "/api/items": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
     },
   },
 });

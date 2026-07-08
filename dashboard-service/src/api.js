@@ -49,6 +49,32 @@ export async function fetchUsers() {
   return data;
 }
 
+export async function updateUserRole(userId, role) {
+  const { data } = await api.patch(`/api/auth/users/${userId}/role`, { role });
+  return data;
+}
+
+// --- Items (Auth Service) ---
+
+export async function fetchItems({ skip = 0, limit = 100 } = {}) {
+  const { data } = await api.get("/api/items", { params: { skip, limit } });
+  return data;
+}
+
+export async function createItem({ name, description, price, is_offer }) {
+  const { data } = await api.post("/api/items", { name, description, price, is_offer });
+  return data;
+}
+
+export async function updateItem(id, payload) {
+  const { data } = await api.put(`/api/items/${id}`, payload);
+  return data;
+}
+
+export async function deleteItem(id) {
+  await api.delete(`/api/items/${id}`);
+}
+
 // --- Log Service ---
 
 export async function fetchLogs({ limit = 100, level = "", service = "" } = {}) {

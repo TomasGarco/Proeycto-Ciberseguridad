@@ -183,18 +183,30 @@ class Token(BaseModel):
     access_token: str
     token_type: str
 
+def _validar_password(v: str) -> str:
+    """Política de contraseña compartida entre registro y cambio de contraseña:
+    mínimo 8 caracteres, mayúscula, minúscula, dígito y al menos 3 caracteres
+    distintos (bloquea repeticiones triviales como '11111111')."""
+    if len(set(v)) < 3:
+        raise ValueError("La contraseña no puede ser de caracteres repetitivos (ej: 11111111). Usa al menos 3 caracteres distintos.")
+    if not any(c.isupper() for c in v):
+        raise ValueError("La contraseña debe incluir al menos una letra mayúscula.")
+    if not any(c.islower() for c in v):
+        raise ValueError("La contraseña debe incluir al menos una letra minúscula.")
+    if not any(c.isdigit() for c in v):
+        raise ValueError("La contraseña debe incluir al menos un número.")
+    return v
+
+
 class UserCreate(BaseModel):
     username: str  = Field(..., min_length=3, max_length=50,  example="john_doe")
     email:    str  = Field(...,                                example="john@example.com")
-    password: str  = Field(..., min_length=6,                  example="password123")
+    password: str  = Field(..., min_length=8,                  example="Password123")
 
     @field_validator("password")
     @classmethod
-    def password_no_repetitiva(cls, v: str) -> str:
-        """Rechaza contraseñas de caracteres repetitivos (ej: '111111', 'aaaaaa')."""
-        if len(set(v)) < 3:
-            raise ValueError("La contraseña no puede ser de caracteres repetitivos (ej: 111111). Usa al menos 3 caracteres distintos.")
-        return v
+    def password_valida(cls, v: str) -> str:
+        return _validar_password(v)
 
 class UserResponse(BaseModel):
     id:         int
@@ -205,17 +217,24 @@ class UserResponse(BaseModel):
     class Config:
         from_attributes = True
 
+class UserRoleUpdate(BaseModel):
+    role: str = Field(..., example="admin")
+
+    @field_validator("role")
+    @classmethod
+    def role_valido(cls, v: str) -> str:
+        if v not in ("user", "admin"):
+            raise ValueError("El rol debe ser 'user' o 'admin'.")
+        return v
+
 class PasswordChange(BaseModel):
     current_password: str = Field(..., example="admin123")
-    new_password:      str = Field(..., min_length=6, example="newpassword456")
+    new_password:      str = Field(..., min_length=8, example="NewPassword456")
 
     @field_validator("new_password")
     @classmethod
-    def new_password_no_repetitiva(cls, v: str) -> str:
-        """Misma regla que en el registro: sin contraseñas de caracteres repetitivos."""
-        if len(set(v)) < 3:
-            raise ValueError("La contraseña no puede ser de caracteres repetitivos (ej: 111111). Usa al menos 3 caracteres distintos.")
-        return v
+    def new_password_valida(cls, v: str) -> str:
+        return _validar_password(v)
 
 class ItemCreate(BaseModel):
     name:        str            = Field(..., min_length=2, max_length=50,  example="Auriculares Gamer")
@@ -592,12 +611,14 @@ async def swagger_ui_redirect():
 def register(user_data: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_auth_db)):
     """
     Crea una cuenta de usuario con rol **`user`** por defecto. El rol `admin` no puede
-    asignarse desde este endpoint — solo existe el usuario semilla `admin`/`admin123`.
+    asignarse desde este endpoint — un administrador existente puede promover la cuenta
+    después con **`PATCH /auth/users/{user_id}/role`**.
 
     - **username**: único, entre 3 y 50 caracteres
     - **email**: único, debe contener `@`
-    - **password**: mínimo 6 caracteres y al menos 3 caracteres distintos — se rechazan
-      contraseñas repetitivas como `111111` (se almacena hasheada con bcrypt, nunca en texto plano)
+    - **password**: mínimo 8 caracteres, con mayúscula, minúscula, número y al menos 3
+      caracteres distintos — se rechazan contraseñas repetitivas como `11111111`
+      (se almacena hasheada con bcrypt, nunca en texto plano)
 
     Al registrarse correctamente, usa **`/auth/login`** para obtener tu token JWT.
     """
@@ -698,7 +719,7 @@ def get_me(current_user: UserORM = Depends(get_current_user)):
     responses={
         400: {"description": "Contraseña actual incorrecta", "content": {"application/json": {"example": {"detail": "La contraseña actual es incorrecta."}}}},
         401: {"description": "Token ausente, inválido o expirado"},
-        422: {"description": "new_password con menos de 6 caracteres"},
+        422: {"description": "new_password no cumple la política de contraseña"},
     },
 )
 def change_password(
@@ -709,9 +730,9 @@ def change_password(
 ):
     """
     Cambia la contraseña del usuario autenticado. Requiere enviar la contraseña
-    **actual** para verificarla antes de aplicar la nueva (mínimo 6 caracteres).
-    Los tokens ya emitidos siguen siendo válidos hasta su expiración natural —
-    este endpoint no los revoca.
+    **actual** para verificarla antes de aplicar la nueva (mínimo 8 caracteres,
+    con mayúscula, minúscula y número). Los tokens ya emitidos siguen siendo
+    válidos hasta su expiración natural — este endpoint no los revoca.
     """
     if not verify_password(data.current_password, current_user.hashed_password):
         # Llamada directa (no add_task): las BackgroundTasks se descartan al
@@ -741,6 +762,47 @@ def list_users(
 ):
     """Lista todos los usuarios registrados, incluyendo su rol y fecha de alta. **Requiere rol de administrador.**"""
     return db.query(UserORM).all()
+
+
+@app.patch(
+    "/auth/users/{user_id}/role",
+    response_model=UserResponse,
+    tags=["Auth"],
+    summary="Cambiar el rol de un usuario (solo Admin)",
+    responses={
+        400: {"description": "Un administrador no puede cambiar su propio rol", "content": {"application/json": {"example": {"detail": "No puedes cambiar tu propio rol."}}}},
+        401: {"description": "Token ausente, inválido o expirado"},
+        403: {"description": "El usuario autenticado no tiene rol admin"},
+        404: {"description": "El usuario indicado no existe"},
+    },
+)
+def update_user_role(
+    user_id: int,
+    role_data: UserRoleUpdate,
+    background_tasks: BackgroundTasks,
+    current_user: UserORM = Depends(require_admin),
+    db: Session = Depends(get_auth_db)
+):
+    """
+    Promueve o degrada a un usuario entre los roles `user` y `admin`.
+    **Requiere rol de administrador.** Un admin no puede cambiar su propio rol
+    (evita quedarse sin administradores o una auto-degradación por error) —
+    para eso, otro administrador debe hacerlo.
+    """
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="No puedes cambiar tu propio rol.")
+
+    user = db.query(UserORM).filter(UserORM.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail=f"Usuario {user_id} no encontrado.")
+
+    rol_anterior = user.role
+    user.role = role_data.role
+    db.commit()
+    db.refresh(user)
+    if rol_anterior != user.role:
+        background_tasks.add_task(send_log, "WARNING", f"Administrador '{current_user.username}' cambió el rol de '{user.username}' de '{rol_anterior}' a '{user.role}'.")
+    return user
 
 
 # ============================================================

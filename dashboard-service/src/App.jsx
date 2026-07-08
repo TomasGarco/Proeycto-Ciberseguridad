@@ -7,11 +7,13 @@ import LogsPage from "./pages/LogsPage";
 import StatsPage from "./pages/StatsPage";
 import AlertsPage from "./pages/AlertsPage";
 import UsersPage from "./pages/UsersPage";
+import ItemsPage from "./pages/ItemsPage";
 
 const TABS = [
   { id: "logs", label: "Logs" },
   { id: "stats", label: "Estadísticas" },
   { id: "alerts", label: "Alertas" },
+  { id: "items", label: "Artículos" },
   { id: "users", label: "Usuarios", adminOnly: true },
 ];
 
@@ -86,8 +88,9 @@ export default function App() {
       <main>
         {tab === "logs" && <LogsPage />}
         {tab === "stats" && <StatsPage />}
-        {tab === "alerts" && <AlertsPage />}
-        {tab === "users" && user.role === "admin" && <UsersPage />}
+        {tab === "alerts" && <AlertsPage user={user} />}
+        {tab === "items" && <ItemsPage user={user} />}
+        {tab === "users" && user.role === "admin" && <UsersPage user={user} />}
       </main>
 
       <footer className="footer muted">

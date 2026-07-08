@@ -228,7 +228,7 @@ Los esquemas Pydantic **validan** los datos que llegan en las requests y los que
 |---|---|---|---|
 | username | `str` | min_length=3, max_length=50 | - |
 | email | `str` | - | - |
-| password | `str` | min_length=6 | - |
+| password | `str` | min_length=8 | - |
 
 **`UserResponse`**
 
@@ -240,12 +240,18 @@ Los esquemas Pydantic **validan** los datos que llegan en las requests y los que
 | role | `str` | - | - |
 | created_at | `datetime` | - | - |
 
+**`UserRoleUpdate`**
+
+| Campo | Tipo | Restricciones | Default |
+|---|---|---|---|
+| role | `str` | - | - |
+
 **`PasswordChange`**
 
 | Campo | Tipo | Restricciones | Default |
 |---|---|---|---|
 | current_password | `str` | - | - |
-| new_password | `str` | min_length=6 | - |
+| new_password | `str` | min_length=8 | - |
 
 **`ItemCreate`**
 
@@ -458,6 +464,7 @@ def update_item(item_id: int, _: UserORM = Depends(require_admin)):
 | `GET` | `/auth/me` | Auth | `get_me()` | Perfil del usuario autenticado |
 | `POST` | `/auth/change-password` | Auth | `change_password()` | Cambiar contraseña del usuario autenticado |
 | `GET` | `/auth/users` | Auth | `list_users()` | Listar todos los usuarios (solo Admin) |
+| `PATCH` | `/auth/users/{user_id}/role` | Auth | `update_user_role()` | Cambiar el rol de un usuario (solo Admin) |
 | `GET` | `/api/items` | Items | `get_items()` | Listar todos los artículos |
 | `GET` | `/api/items/{item_id}` | Items | `get_item()` | Obtener artículo por ID |
 | `POST` | `/api/items` | Items | `create_item()` | Crear nuevo artículo |

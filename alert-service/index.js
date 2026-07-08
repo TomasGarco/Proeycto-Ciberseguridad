@@ -234,6 +234,13 @@ app.get("/alerts/stats", requireDb, async (req, res) => {
 });
 
 // Cambia el estado de una alerta (ciclo de vida del incidente).
+//
+// Sin validación de rol aquí a propósito: el control de acceso (solo admin
+// puede reconocer/cerrar) vive en el dashboard, que oculta estos botones a
+// usuarios no-admin — mismo criterio que analysis-service y log-service, que
+// tampoco validan JWT. nginx es el único punto de entrada público del stack;
+// añadir auth solo a este endpoint sin cubrir los demás daría una falsa
+// sensación de seguridad sin cerrar el hueco real.
 app.patch("/alerts/:id", requireDb, async (req, res) => {
   const { status } = req.body || {};
   if (!VALID_STATUSES.includes(status)) {
