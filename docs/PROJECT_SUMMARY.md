@@ -8,7 +8,7 @@
 
 ## 1. El elevator pitch (30 segundos)
 
-> "Es la base de una plataforma SOC/SIEM — un sistema de monitoreo de seguridad que recolecta logs, los analiza y genera alertas. Ahora mismo tengo construida la parte de autenticación y el motor CRUD: cuatro contenedores en Docker (Auth Service, Log Service, PostgreSQL y MongoDB), con login JWT, control de roles, dos bases de datos Postgres aisladas, logs persistidos en MongoDB y un dashboard web. Cubre las Semanas 1 a 5 de un roadmap de 10 semanas (aunque Mongo aún no se verificó end-to-end); lo que falta es sumar colas de mensajes (RabbitMQ), un motor de reglas de detección y un dashboard en React."
+> "Es una plataforma SOC/SIEM — un sistema de monitoreo de seguridad que recolecta logs, los analiza y genera alertas. Son 5 microservicios en 8 contenedores Docker: autenticación con JWT y roles (FastAPI + PostgreSQL), recolección de logs (FastAPI + MongoDB), análisis con un motor de reglas de detección que evalúa severidad (umbral, patrón, palabra clave), gestión de alertas con ciclo de vida de incidentes (Node.js + PostgreSQL) y un dashboard en React. Los servicios se comunican de forma asíncrona por RabbitMQ. Cubre las Semanas 1 a 8 de un roadmap de 10; lo que falta es Redis como capa de caché."
 
 ## 2. Qué es un SOC/SIEM (el contexto de negocio)
 
@@ -16,23 +16,21 @@
 - **SIEM (Security Information and Event Management):** la tecnología que alimenta al SOC — recolecta logs de múltiples fuentes, los correlaciona y genera alertas.
 - **Por qué importa la gestión de logs:** sin recolección y normalización de eventos, es imposible detectar amenazas, correlacionar incidentes o cumplir marcos como ISO 27001, NIST o PCI-DSS.
 
-Detalle completo del objetivo, alcance y arquitectura final propuesta: **[`README.md`](../README.md)**.
+Detalle completo del objetivo, alcance y arquitectura: **[`README.md`](../README.md)** (sección "Diseño y Arquitectura").
 
 ## 3. Qué existe hoy — el estado real del código
 
-Cuatro contenedores orquestados con `docker-compose.yml` (Auth Service, Log Service, PostgreSQL, MongoDB). Detalle de puertos, responsabilidades y variables de conexión: **[`README.md`](../README.md)** (secciones "Diseño y Arquitectura" y "Persistencia de Datos en Docker").
+Ocho contenedores orquestados con `docker-compose.yml`: los 5 servicios de aplicación (Auth, Log, Analysis, Alert, Dashboard) más PostgreSQL, MongoDB y RabbitMQ. Detalle de puertos, responsabilidades y variables de conexión: **[`README.md`](../README.md)** (secciones "Diseño y Arquitectura" y "Persistencia de Datos en Docker").
 
-Auth Service y Log Service se comunican por HTTP síncrono (`requests` + `BackgroundTasks` de FastAPI) — **no hay cola de mensajes todavía**, eso es Semana 6.
-
-Nota de estado: la integración de MongoDB en Log Service (Semana 4) está implementada en el código pero **no verificada end-to-end** — ver [`README.md`](../README.md) sección "Estado actual vs. objetivo final".
+La comunicación es asíncrona en dos tramos vía RabbitMQ: Log Service publica cada evento al exchange `logs_events` (lo consume Analysis Service) y Analysis Service publica cada alerta disparada al exchange `alerts_events` (lo consume Alert Service, que la persiste en PostgreSQL). Solo el tramo Auth → Log es HTTP directo (`requests` + `BackgroundTasks` de FastAPI).
 
 ## 4. El roadmap de 10 semanas — qué está hecho y qué no
 
-Tabla completa con detalle de entregables y estado de cada semana: **[`README.md`](../README.md)** (sección "Estado del Roadmap").
+Semanas 1–8 completadas: autenticación JWT con roles (1–3), persistencia PostgreSQL y MongoDB (4–5), mensajería RabbitMQ (6), dashboard React (7), motor de reglas de detección + Alert Service con ciclo de vida de incidentes (8). Pendiente: Redis como capa de caché (Semana 9+).
 
-## 5. Cómo se ve la arquitectura final (a la que se llega en la Semana 9)
+## 5. La arquitectura final (a la que se llega en la Semana 9)
 
-5 microservicios en vez de 2 — Auth (FastAPI), Log (FastAPI), **Analysis** (Python, motor de reglas), **Alert** (Node.js/Express), **Dashboard** (React) — sobre PostgreSQL + MongoDB + RabbitMQ + Redis. Diagrama completo y qué hace cada servicio nuevo: **[`README.md`](../README.md)** sección "Arquitectura objetivo".
+Los 5 microservicios ya existen y están conectados — Auth (FastAPI), Log (FastAPI), **Analysis** (Python, motor de reglas), **Alert** (Node.js/Express), **Dashboard** (React) — sobre PostgreSQL + MongoDB + RabbitMQ. La única pieza de infraestructura que falta del diagrama objetivo es **Redis** (caché del Analysis Service). Diagrama completo: **[`README.md`](../README.md)** sección "Diseño y Arquitectura".
 
 ## 6. Cómo explicar el flujo técnico (para una demo en vivo)
 
@@ -51,8 +49,7 @@ Comandos exactos, API reference completa con ejemplos de request/response, troub
 
 ## 9. Si vas a tocar el código (convenciones técnicas)
 
-Cómo está organizado el repo, por qué hay que reconstruir la imagen Docker después de cada cambio (no hay volumen montado — el código se copia en build-time), estilo de código, cómo correr el único test que existe:
-**[`README.md`](../README.md)**
+Lo esencial: cada servicio copia su código en build-time (no hay volumen montado), así que **después de editar hay que reconstruir** — `docker compose build <servicio> && docker compose up -d <servicio>`. Estilo: español en docstrings/mensajes de error/UI, 4 espacios en Python, modelos Pydantic con `Field(..., example=...)`, clases ORM con sufijo `ORM`. Los comandos de build, inspección de bases de datos y ejecución local están en **[`docs/WEEKS_1-2_IMPLEMENTATION.md`](WEEKS_1-2_IMPLEMENTATION.md#command--script-reference)**.
 
 ## 10. Tabla completa de comandos y scripts
 
@@ -66,8 +63,8 @@ Cada comando de Docker Compose, cada script (`run_local.bat`, `test_crud.py`) y 
 | "¿Por qué dos bases de datos separadas en vez de una?" | `docs/AUTH_SERVICE_ARCHITECTURE.md` → sección "Base de Datos" |
 | "¿Cómo se protege la contraseña?" | `docs/AUTH_SERVICE_ARCHITECTURE.md` → `hash_password()` (bcrypt, nunca texto plano) |
 | "¿Qué pasa si el token expira?" | `docs/WEEKS_1-2_IMPLEMENTATION.md` → "Token expired" en Troubleshooting |
-| "¿Por qué HTTP y no cola de mensajes para los logs?" | `docs/ARCHITECTURE_VISUAL_GUIDE.md` → sección 7, y `README.md` (es justamente lo que cambia en Semana 6) |
-| "¿Qué le falta al proyecto para estar completo?" | Este documento, sección 4, o `README.md` completo |
+| "¿Por qué colas de mensajes y no HTTP entre servicios?" | Este documento, sección 3, y `README.md` → sección de RabbitMQ (desacople: un servicio caído no tumba a los demás) |
+| "¿Qué le falta al proyecto para estar completo?" | Este documento, secciones 4 y 5 (solo Redis) |
 | "¿Cómo se controla qué puede hacer un admin vs un user?" | `docs/ARCHITECTURE_VISUAL_GUIDE.md` → sección 5 (RBAC) |
 | "¿Cómo pruebo la API sin escribir código?" | `docs/WEEKS_1-2_IMPLEMENTATION.md` → "Testing Endpoints" (Swagger UI en `/docs`) |
 | "¿Qué hace exactamente cada comando/script del proyecto?" | `docs/WEEKS_1-2_IMPLEMENTATION.md` → "Command & Script Reference" |
