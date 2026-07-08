@@ -323,7 +323,10 @@ def _consume_loop():
             time.sleep(3)
 
 
-threading.Thread(target=_consume_loop, daemon=True, name="rabbitmq-consumer").start()
+# ANALYSIS_SKIP_CONSUMER=1 evita levantar el hilo (y su intento de conexión a
+# RabbitMQ) al importar este módulo desde los tests del motor de reglas.
+if not os.getenv("ANALYSIS_SKIP_CONSUMER"):
+    threading.Thread(target=_consume_loop, daemon=True, name="rabbitmq-consumer").start()
 
 app = FastAPI(
     title="Analysis Service",
