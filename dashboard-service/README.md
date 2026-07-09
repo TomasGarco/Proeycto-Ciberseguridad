@@ -14,6 +14,10 @@ Frontend y punto de entrada principal de la plataforma. nginx sirve la SPA compi
 
 El contexto de build de este servicio es la **raíz del repo** (no `dashboard-service/`), porque el `Dockerfile` necesita copiar `certs/dev.crt`/`certs/dev.key` — ver `dockerfile: dashboard-service/Dockerfile` en `docker-compose.yml`.
 
+## Rate limiting (Semana 10)
+
+`ratelimit.conf` define la zona `api_zone` (1 request/segundo por IP, ráfaga de 20) a nivel `http` de nginx; `nginx.conf` la aplica con `limit_req` en cada `location /api/*`. Cubre floods generales a items, alertas, logs y estadísticas — además del límite específico que ya tenía login/registro en auth-service. Responde `429` (configurado con `limit_req_status 429`, en vez del `503` por defecto de nginx).
+
 ## Pantallas (`src/pages/`)
 
 | Archivo | Qué muestra | Restricción por rol |

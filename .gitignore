@@ -8,3 +8,4 @@ dist/
 certs/*.crt
 certs/*.key
 backups/
+scripts/backup.log

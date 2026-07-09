@@ -170,7 +170,11 @@ Para producción real, `certs/dev.crt`/`certs/dev.key` se reemplazarían por un 
 
 ### Backups
 
-No hay backup automático programado — los datos viven únicamente en los volúmenes Docker (`postgres_data`, `mongo_data`, `rabbitmq_data`, `redis_data`). Si se pierde el volumen, se pierde el dato. `scripts/backup.sh` exporta las 4 bases (`auth_db`, `items_db`, `alerts_db` de PostgreSQL vía `pg_dump`; `logs_db` de MongoDB vía `mongodump`) a una carpeta con timestamp:
+Los datos viven únicamente en los volúmenes Docker (`postgres_data`, `mongo_data`, `rabbitmq_data`, `redis_data`). Si se pierde el volumen, se pierde el dato — por eso hay un backup diario automático además del manual.
+
+**Automático:** una Tarea Programada de Windows ("SOC-SIEM Backup Diario") corre `scripts/backup-scheduled.bat` todos los días a las 3:00 AM. Requiere que la sesión de Windows esté iniciada a esa hora (no corre con la PC apagada ni desde la pantalla de bloqueo sin sesión activa — es una tarea de usuario, no de sistema). El log de cada corrida queda en `scripts/backup.log` (no versionado). Para ver/editar la tarea: `schtasks /Query /TN "SOC-SIEM Backup Diario" /V /FO LIST`, o desde el Programador de tareas de Windows.
+
+**Manual:** `scripts/backup.sh` exporta las 4 bases (`auth_db`, `items_db`, `alerts_db` de PostgreSQL vía `pg_dump`; `logs_db` de MongoDB vía `mongodump`) a una carpeta con timestamp, para correr antes de una demo importante o un cambio grande:
 
 ```bash
 # Con el stack levantado, desde la raíz del repo:
@@ -184,7 +188,7 @@ Para restaurar un backup (sobreescribe los datos actuales, sin confirmación —
 sh scripts/restore.sh backups/20260709_170000
 ```
 
-`backups/` no se versiona (ver `.gitignore`) porque contiene datos reales de usuarios y eventos. Conviene correr `scripts/backup.sh` antes de una demo importante o de cualquier cambio grande al esquema de datos.
+`backups/` y `scripts/backup.log` no se versionan (ver `.gitignore`) porque contienen datos reales de usuarios y eventos.
 
 ### Puertos
 

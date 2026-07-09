@@ -16,6 +16,9 @@ RUN npm run build
 FROM nginx:alpine
 
 COPY dashboard-service/nginx.conf /etc/nginx/conf.d/default.conf
+# limit_req_zone debe declararse a nivel "http", no dentro de un "server" —
+# se carga como archivo separado en conf.d/ (mismo include que default.conf).
+COPY dashboard-service/ratelimit.conf /etc/nginx/conf.d/ratelimit.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 # Certificado autofirmado de desarrollo (ver certs/generate-dev-cert.sh en la
 # raíz del repo) — no versionado, cada quien lo genera una vez antes del build.
