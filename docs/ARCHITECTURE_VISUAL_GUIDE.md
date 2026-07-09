@@ -351,21 +351,21 @@ Capa 3: Autorización
    └─ 403 Forbidden si no autorizado
 
 Capa 4: Comunicación
-   ├─ HTTP en desarrollo
-   ├─ [PENDIENTE] HTTPS recomendado en producción
-   └─ CORS habilitado para testing
+   ├─ HTTP plano entre servicios (red interna de Docker, no expuesta al host)
+   ├─ HTTPS en el navegador (Semana 10): dashboard-service/nginx termina TLS en :443
+   └─ CORS restringido a un origen específico (CORS_ORIGINS, no "todos los orígenes")
 
 Capa 5: Base de Datos
    ├─ PostgreSQL (Docker) / SQLite (fallback local)
    ├─ Bases de auth e items aisladas entre sí
    └─ Foreign keys para integridad
 
-RECOMENDACIONES PARA PRODUCCIÓN:
-   ├─ Cambiar SECRET_KEY (hoy está hardcodeado en app.py)
-   ├─ Habilitar HTTPS/TLS
-   ├─ Agregar rate limiting
-   ├─ Logging y monitoreo persistente (hoy Log Service es en memoria)
-   └─ Validaciones adicionales
+ENDURECIDO EN SEMANA 10 (ya no son recomendaciones pendientes):
+   ├─ JWT_SECRET_KEY es una variable de entorno con secreto real generado (no hardcodeado)
+   ├─ HTTPS habilitado en el punto de entrada del navegador (certificado autofirmado de desarrollo)
+   ├─ Rate limiting: login (5 fallos/60s), registro (10/5min por IP), y general en nginx (1 req/s por IP)
+   ├─ Logging estructurado en JSON en los 5 servicios; Log Service persiste en MongoDB (no en memoria) desde la Semana 4
+   └─ Backups: manual (scripts/backup.sh) + automático (Tarea Programada de Windows, diario 3 AM)
 ```
 
 ---
@@ -447,20 +447,20 @@ Log Service internamente:
 │                                                  │
 └──────────────────────────────────────────────────┘
 
-[Autenticado como "john_doe" (user)]
+[Autenticado como "john_doe" (analista)]
 ┌──────────────────────────────────────────────────┐
 │  Python CRUD API Service                         │
 ├──────────────────────────────────────────────────┤
 │                                                  │
-│  Bienvenido, john_doe (user)                     │
+│  Bienvenido, john_doe (analista)                     │
 │  [Cerrar sesión]                                │
 │                                                  │
 │  ┌─ Inventario de Productos ──────────────────┐ │
 │  │                                              │ │
-│  │ Laptop Gaming         │ $2500.00  (user)    │ │
-│  │ Mouse Gamer          │ $59.99    (user)    │ │
-│  │ Monitor 4K           │ $349.99   (user)    │ │
-│  │ Teclado Mecánico     │ $89.99    (user)    │ │
+│  │ Laptop Gaming         │ $2500.00  (analista)    │ │
+│  │ Mouse Gamer          │ $59.99    (analista)    │ │
+│  │ Monitor 4K           │ $349.99   (analista)    │ │
+│  │ Teclado Mecánico     │ $89.99    (analista)    │ │
 │  │                                              │ │
 │  └──────────────────────────────────────────────┘ │
 │                                                  │
@@ -555,27 +555,27 @@ BackgroundTasks para logging
 PostgreSQL en Docker, SQLite como fallback
    ├─ ¿Por qué? Postgres refleja producción, SQLite simplifica dev sin Docker
    ├─ Estado: Migrado en Semana 4
-   └─ Pendiente: MongoDB para Log Service
+   └─ Log Service usa MongoDB (también migrado en Semana 4), no Postgres
 
 HTML embebido en FastAPI
    ├─ ¿Por qué? Dashboard simple, all-in-one
-   ├─ Desventaja: Hace app.py muy largo
-   └─ Plan: Mover a React en Semana 7
+   ├─ Desventaja: Hacía app.py muy largo
+   └─ Estado: reemplazado por el dashboard React en Semana 7 — el HTML embebido sigue existiendo como consola secundaria en :8000, sin tocar
 
 Docker Compose con volúmenes
    ├─ ¿Por qué? Persistencia entre reinicios
    ├─ Ventaja: Datos no se pierden
    └─ Ideal para desarrollo y testing
 
-Sin rate limiting (desarrollo)
-   ├─ ¿Por qué? Simplificar MVP
-   ├─ Plan: Agregar más adelante
-   └─ Crítico para producción
+Rate limiting (Semana 10 — ya implementado)
+   ├─ Login: 5 fallos/60s bloquean 60s por usuario
+   ├─ Registro: 10 registros/5min bloquean por IP
+   └─ General: 1 req/s por IP en nginx (todo /api/*)
 
-Sin HTTPS (desarrollo)
-   ├─ ¿Por qué? Localhost no lo necesita
-   ├─ Plan: TLS en fase de deployment
-   └─ Requerido para producción
+HTTPS (Semana 10 — ya implementado)
+   ├─ nginx (dashboard-service) sirve el navegador por :443 con certificado autofirmado
+   ├─ El tramo nginx → microservicios sigue en HTTP, dentro de la red interna de Docker
+   └─ Para producción real: reemplazar el certificado por uno de una autoridad certificadora
 ```
 
 ---

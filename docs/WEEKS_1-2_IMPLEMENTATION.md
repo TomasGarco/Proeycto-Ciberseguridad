@@ -550,7 +550,7 @@ Users (1) ───────→ (Many) Items
 
 2. Backend generates JWT token
    - Payload: { "sub": username, "role": role, "exp": timestamp_in_60_minutes }
-   - Secret: hardcoded in auth-service/app.py (SECRET_KEY) — known placeholder, not env-configurable yet
+   - Secret: `JWT_SECRET_KEY` env var (Week 10: real 256-bit secret generated in `.env`; only `.env.example` keeps the placeholder). Same key used by Log, Analysis and Alert Service to verify tokens.
    - Algorithm: HS256 (HMAC SHA256)
 
 3. Backend returns { "access_token": "...", "token_type": "bearer" }
@@ -703,6 +703,10 @@ Every script and non-obvious command used in this project, and what it actually 
 | `run_local.bat` | Windows batch script. Opens two separate command-prompt windows, each running `uvicorn --reload` for one service, using the `venv` at the repo root. No Postgres involved — services fall back to local SQLite automatically since `POSTGRES_HOST` is never set in this path. |
 | `python test_crud.py` | Standalone smoke test (not pytest). Runs a sequential CRUD cycle (list, create, fetch by id, update, delete, list again) against `/api/items` on `http://127.0.0.1:8000`. The server must already be running. It does **not** cover auth/login — only the items CRUD. |
 | `postgres-init/01-create-databases.sql` | Not run manually — the official Postgres image executes every `.sql`/`.sh` file in `/docker-entrypoint-initdb.d/` automatically, but **only on the container's first startup** (i.e. only when the `postgres_data` volume is empty). Creates `auth_db` and `items_db`. |
+| `scripts/backup.sh` (Week 10) | Exports all 4 databases (`auth_db`, `items_db`, `alerts_db` via `pg_dump`; `logs_db` via `mongodump`) into `backups/<timestamp>/`. Run manually from the repo root with the stack up: `sh scripts/backup.sh`. |
+| `scripts/restore.sh` (Week 10) | Restores a backup created by `backup.sh` — **overwrites current data without confirmation**. Usage: `sh scripts/restore.sh backups/20260709_170000`. |
+| `scripts/backup-scheduled.bat` (Week 10) | Wrapper invoked by the Windows Scheduled Task "SOC-SIEM Backup Diario" (daily, 3:00 AM) — calls `scripts/backup.sh` via Git Bash and logs to `scripts/backup.log`. Requires an active Windows session at that time. |
+| `certs/generate-dev-cert.sh` (Week 10) | Generates the self-signed TLS certificate (`certs/dev.crt`/`certs/dev.key`) that nginx uses to serve the dashboard over HTTPS. Run once before the first build: `docker run --rm -v "$(pwd)/certs:/certs" alpine sh -c "apk add --no-cache openssl >/dev/null 2>&1 && sh /certs/generate-dev-cert.sh"`. |
 
 ---
 
@@ -844,9 +848,6 @@ rm -f data/auth.db data/items.db
 
 ---
 
-## Next Steps
+## Roadmap — already completed
 
-- **Week 6:** Add RabbitMQ message queue for resilient async logging
-- **Week 4 (remainder):** Add MongoDB for Log Service persistence
-- **Week 7:** Build React frontend to replace the embedded HTML dashboard
-- **Week 8:** Add Analysis Service (detection rules) and Alert Service
+This document originally described the Week 4 state. Everything listed here as a "next step" has since been done: MongoDB for Log Service (Week 4), RabbitMQ async messaging (Week 6), the React dashboard (Week 7), Analysis Service and Alert Service (Week 8), Redis caching (Week 9), and the Week 10 security hardening (analista/admin roles, JWT on all 4 backends, HTTPS, general rate limiting, backups). See **[`docs/PROJECT_SUMMARY.md`](PROJECT_SUMMARY.md)** for the complete, up-to-date roadmap summary.

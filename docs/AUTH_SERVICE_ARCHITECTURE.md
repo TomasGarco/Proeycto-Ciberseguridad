@@ -75,6 +75,7 @@ from jose import jwt, JWTError
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | **hardcoded en el código** | - | `60` |
 | `LOGIN_RATE_LIMIT_WINDOW_SECONDS` | **hardcoded en el código** | - | `60` |
 | `LOGIN_RATE_LIMIT_BLOCK_SECONDS` | **hardcoded en el código** | - | `60` |
+| `REGISTER_RATE_LIMIT_WINDOW_SECONDS` | **hardcoded en el código** | - | `300` |
 | `LOG_SERVICE_URL` | variable de entorno | `LOG_SERVICE_URL` | `http://localhost:8010` |
 | `POSTGRES_HOST` | variable de entorno | `POSTGRES_HOST` | `None` |
 | `POSTGRES_PORT` | variable de entorno | `POSTGRES_PORT` | `5432` |
@@ -83,7 +84,7 @@ from jose import jwt, JWTError
 <!-- AUTO-GENERATED:END:auth-config -->
 
 **Explicación (mantenimiento manual — no se genera del código):**
-- `SECRET_KEY`: Clave privada para firmar tokens JWT. **Pendiente: cambiar en producción** — hoy está hardcodeada en el código, no viene de una variable de entorno.
+- `SECRET_KEY`: Clave privada para firmar tokens JWT. Viene de la variable de entorno `JWT_SECRET_KEY` (Semana 10: se generó un secreto real de 256 bits en `.env`; solo `.env.example` conserva el placeholder de ejemplo). La misma clave la usan Log, Analysis y Alert Service para *verificar* los tokens que este servicio firma.
 - `ALGORITHM`: Algoritmo de firma (HS256 = HMAC con SHA-256)
 - `ACCESS_TOKEN_EXPIRE_MINUTES`: Token válido por 60 minutos
 - `LOG_SERVICE_URL`: URL del Log Service para enviar logs (por defecto localhost:8010)
@@ -1002,12 +1003,13 @@ El dashboard es una página HTML embebida en el endpoint GET `/`:
 | Aspecto | Implementación |
 |---------|-----------------|
 | **Contraseñas** | Hasheadas con bcrypt (no texto plano) |
-| **Tokens** | JWT firmados con SECRET_KEY |
+| **Tokens** | JWT (HS256) firmados con `JWT_SECRET_KEY` — env var, no hardcodeada |
 | **Expiración** | 60 minutos (configurable) |
 | **Roles** | RBAC: "analista" vs "admin" |
-| **Endpoints protegidos** | Todos requieren `Depends(get_current_user)` |
-| **CORS** | Habilitado para todos los orígenes |
-| **HTTPS** | No configurado — pendiente para producción |
+| **Endpoints protegidos** | La mayoría requiere `Depends(get_current_user)`; `/auth/register`, `/auth/login`, `/api/health` quedan públicos a propósito |
+| **Rate limiting** | Login: 5 fallos/60s bloquean 60s por usuario. Registro (Semana 10): 10 registros/5min bloquean por IP |
+| **CORS** | Restringido a `CORS_ORIGINS` (por defecto `https://localhost`, un solo origen — no "todos los orígenes") |
+| **HTTPS** | Este servicio en sí habla HTTP plano dentro de la red interna de Docker; el navegador entra por HTTPS a través de nginx (dashboard-service, puerto 443, Semana 10) — TLS termina ahí, no acá |
 | **Base de datos** | PostgreSQL (Docker) con fallback a SQLite local sin Docker |
 
 ---
@@ -1064,12 +1066,10 @@ Referencia rápida de comandos usados con este servicio específico. Para la lis
 |---|---|---|---|---|
 | `GET` | `/api/health` | System | `health_check()` | Estado del servicio |
 | `POST` | `/logs` | Logs | `create_log()` | Registra un evento de log enviado por cualquier microservicio en MongoDB. |
-| `GET` | `/logs` | Logs | `get_logs()` | Retorna logs de MongoDB con opciones de filtrado. |
+| `GET` | `/logs` | Logs | `get_logs()` | Retorna logs de MongoDB con opciones de filtrado. **Requiere estar autenticado.** |
 <!-- AUTO-GENERATED:END:log-endpoints -->
 
-## Próximos Pasos
+## Roadmap — ya completado
 
-- **Semana 6:** agregar RabbitMQ para comunicación asíncrona entre servicios (hoy Log Service ya persiste en MongoDB, pero la comunicación Auth→Log sigue siendo HTTP síncrono)
-- **Semana 7:** reemplazar el dashboard HTML embebido por un frontend en React
-- **Semana 8:** agregar Analysis Service (motor de reglas) y Alert Service
+Este documento describía originalmente el estado de Semana 4. Todo lo que en su momento era "próximo paso" ya se hizo: RabbitMQ para mensajería asíncrona (Semana 6), dashboard React (Semana 7), Analysis Service y Alert Service (Semana 8), Redis como caché (Semana 9), y los refinamientos de seguridad — roles `analista`/`admin`, JWT en los 4 backends, HTTPS, rate limiting general, backups — de la Semana 10. Ver **[`docs/PROJECT_SUMMARY.md`](PROJECT_SUMMARY.md)** para el resumen completo y actualizado del roadmap.
 
