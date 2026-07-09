@@ -175,6 +175,33 @@ code {
   margin-bottom: 16px;
 }
 
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.card-header .subtitle {
+  margin-bottom: 0;
+}
+
+.doc-link {
+  flex-shrink: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  text-decoration: none;
+  padding: 6px 0 16px;
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+
+.doc-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
 .grid-2 {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));

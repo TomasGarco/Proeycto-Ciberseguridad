@@ -3,6 +3,7 @@ import { createItem, deleteItem, fetchItems, updateItem } from "../api";
 import { useToast } from "../toast";
 
 const EMPTY_FORM = { name: "", description: "", price: "", is_offer: false };
+const PROJECT_DOC_URL = "https://claude.ai/code/artifact/978ab0bf-f683-47fc-aaf5-bfd769d8f162";
 
 function formatPrice(price) {
   return price.toLocaleString("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 });
@@ -97,8 +98,15 @@ export default function ItemsPage({ user }) {
 
   return (
     <div className="card">
-      <h2>Artículos</h2>
-      <p className="subtitle">Inventario de ejemplo (CRUD protegido por rol) — creación abierta a cualquier cuenta, edición y borrado solo para administradores</p>
+      <div className="card-header">
+        <div>
+          <h2>Artículos</h2>
+          <p className="subtitle">Inventario de ejemplo (CRUD protegido por rol) — creación abierta a cualquier cuenta, edición y borrado solo para administradores</p>
+        </div>
+        <a className="doc-link" href={PROJECT_DOC_URL} target="_blank" rel="noopener noreferrer">
+          Ver documentación del proyecto ↗
+        </a>
+      </div>
 
       <div className="controls">
         <button className="btn" type="button" onClick={() => setShowForm((v) => !v)}>
