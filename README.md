@@ -57,11 +57,11 @@ graph TD
 ```
 
 **Características principales**
-- **Dashboard Service ([puerto 3000](http://localhost:3000)) — dashboard principal del proyecto:** frontend en React (Vite + Recharts + Axios) servido por nginx, que además actúa como reverse proxy hacia los demás servicios (un solo origen, sin CORS). Login y registro con validación en vivo de requisitos de cuenta/contraseña (con mostrar/ocultar contraseña y errores anclados a cada campo), notificaciones toast, tabla de logs en vivo con filtros, estadísticas con gráficos, alertas con búsqueda/orden/detalle del evento disparador, **CRUD de artículos** y gestión de usuarios (cambio de rol) para el rol `admin`. Panel diferenciado por rol: un usuario `user` ve las mismas pantallas de solo consulta, pero no puede editar/eliminar artículos, cambiar roles ni reconocer/cerrar alertas. Este es el punto de entrada de la plataforma desde la Semana 7.
+- **Dashboard Service ([puerto 3000](http://localhost:3000)) — dashboard principal del proyecto:** frontend en React (Vite + Recharts + Axios) servido por nginx, que además actúa como reverse proxy hacia los demás servicios (un solo origen, sin CORS). Login y registro con validación en vivo de requisitos de cuenta/contraseña (con mostrar/ocultar contraseña y errores anclados a cada campo), notificaciones toast, tabla de logs en vivo con filtros, estadísticas con gráficos, alertas con búsqueda/orden/detalle del evento disparador, **CRUD de artículos** y gestión de usuarios (cambio de rol) para el rol `admin`. Panel diferenciado por rol: un usuario `analista` ve las mismas pantallas de solo consulta, pero no puede editar/eliminar artículos, cambiar roles ni reconocer/cerrar alertas. Este es el punto de entrada de la plataforma desde la Semana 7.
 - **Auth Service ([puerto 8000](http://localhost:8000)):** API REST principal + dashboard embebido (anterior al de React; se mantiene como consola secundaria de administración de items). Gestiona registros, logins, JWT, productos y roles de usuario. Envía logs de forma asíncrona al Log Service. El login tiene **rate limiting**: 5 intentos fallidos en 60 s para el mismo usuario bloquean ese usuario 60 s (`429 Too Many Requests`) — mismo umbral que la alerta de fuerza bruta del Analysis Service, así que la detección y el bloqueo ocurren juntos. **Política de contraseña**: mínimo 8 caracteres, con mayúscula, minúscula, número y al menos 3 caracteres distintos.
 - **Log Service ([puerto 8010](http://localhost:8010)):** Recolector de logs y consola web. Persiste cada evento en MongoDB y lo publica en RabbitMQ (exchange topic `logs_events`, routing key `logs.<nivel>`).
 - **Analysis Service ([puerto 8002](http://localhost:8002)):** consume los eventos de la cola `analysis_queue` (binding `logs.#`) en un hilo dedicado, les aplica el **motor de reglas de detección** (umbral, patrón regex y palabra clave — Semana 8) y publica cada alerta disparada en el exchange `alerts_events` con routing key `alerts.<severidad>`. Expone estadísticas agregadas (`/stats`, `/events/recent`) y la lista de reglas (`/rules`); los contadores se espejan en **Redis** (write-through) y se restauran al arrancar, así que sobreviven reinicios del contenedor.
-- **Alert Service ([puerto 8003](http://localhost:8003)):** servicio Node.js/Express que consume las alertas de la cola `alerts_queue` (binding `alerts.#`), las **persiste en PostgreSQL** (`alerts_db.alerts`) y expone su API de consulta y ciclo de vida: `GET /alerts` (filtros por severidad/estado), `GET /alerts/stats` y `PATCH /alerts/:id` (nueva → reconocida → cerrada). Severidades: baja, media, alta, crítica.
+- **Alert Service ([puerto 8003](http://localhost:8003)):** servicio Node.js/Express que consume las alertas de la cola `alerts_queue` (binding `alerts.#`), las **persiste en PostgreSQL** (`alerts_db.alerts`) y expone su API de consulta y ciclo de vida: `GET /alerts` (filtros por severidad/estado), `GET /alerts/stats` y `PATCH /alerts/:id` (nueva → reconocida → cerrada). Severidades: baja, media, alta, crítica. **`PATCH /alerts/:id` requiere JWT válido con rol `admin`** (Semana 10) — las lecturas siguen abiertas.
 - **RabbitMQ ([puerto 15672](http://localhost:15672) expuesto; AMQP 5672 solo red interna):** broker de mensajería para la comunicación asíncrona Log Service → Analysis Service (`logs_events`) y Analysis Service → Alert Service (`alerts_events`). UI de gestión en [http://localhost:15672](http://localhost:15672) (ver `.env` para credenciales).
 - **MongoDB (puerto 27017, solo red interna):** almacena los logs en la base `logs_db`, colección `logs`. Log Service espera activamente (`_wait_for_mongodb`, hasta 15 reintentos) a que MongoDB acepte conexiones antes de arrancar.
 - **Redis (puerto 6379, solo red interna):** caché del Analysis Service — contadores de eventos/alertas y últimos eventos, con AOF activado para que también sobrevivan reinicios del propio Redis. Sin `REDIS_HOST` definido, Analysis Service funciona solo en memoria (mismo patrón de fallback que el resto del stack).
@@ -78,27 +78,32 @@ graph TD
 python-docker-service/
 │
 ├── auth-service/           Microservicio de autenticación y productos
+│   ├── README.md           Endpoints, variables de entorno y tests de este servicio
 │   ├── app.py              Código principal y dashboard embebido
 │   ├── requirements.txt    Dependencias (FastAPI, JWT, SQLAlchemy, psycopg2, requests)
 │   └── Dockerfile          Imagen Docker del Auth Service
 │
 ├── log-service/            Microservicio centralizado de auditoría de logs
+│   ├── README.md           Endpoints, variables de entorno y tests de este servicio
 │   ├── app.py              Servidor de logs: persiste en MongoDB y publica a RabbitMQ
 │   ├── requirements.txt    Dependencias (FastAPI, Uvicorn, PyMongo, Pika)
 │   └── Dockerfile          Imagen Docker del Log Service
 │
 ├── analysis-service/       Microservicio de análisis de eventos
+│   ├── README.md           Endpoints, variables de entorno y tests de este servicio
 │   ├── app.py              Consumidor RabbitMQ + API de estadísticas
 │   ├── requirements.txt    Dependencias (FastAPI, Uvicorn, Pika)
 │   └── Dockerfile          Imagen Docker del Analysis Service
 │
 ├── dashboard-service/      Frontend React (SOC Dashboard)
+│   ├── README.md           Pantallas, stack y variables de entorno de este servicio
 │   ├── src/                Código React (páginas, API client, tema)
 │   ├── nginx.conf          Servidor de estáticos + reverse proxy /api/*
 │   ├── vite.config.js      Build con Vite (+ proxy de desarrollo)
 │   └── Dockerfile          Build multi-stage: node → nginx
 │
 ├── alert-service/          Microservicio de gestión de alertas (Node.js/Express)
+│   ├── README.md           Endpoints, variables de entorno y tests de este servicio
 │   ├── index.js            Consumidor RabbitMQ + persistencia Postgres + API REST
 │   ├── package.json        Dependencias (Express, pg, amqplib)
 │   └── Dockerfile          Imagen Docker del Alert Service
@@ -177,7 +182,7 @@ docker exec redis redis-cli get analysis:total_eventos
 
 **Qué es:** la puerta de entrada de seguridad del sistema — FastAPI + PostgreSQL.
 
-**Qué se implementa aquí:** registro y login de usuarios, emisión y validación de JWT, roles (`user`/`admin`), y un CRUD de "items" de ejemplo (usado para practicar operaciones protegidas por rol). También sirve un dashboard HTML embebido propio (versión anterior a la de React) como consola secundaria. Expone Swagger interactivo en `/docs`.
+**Qué se implementa aquí:** registro y login de usuarios, emisión y validación de JWT, roles (`analista`/`admin`), y un CRUD de "items" de ejemplo (usado para practicar operaciones protegidas por rol). También sirve un dashboard HTML embebido propio (versión anterior a la de React) como consola secundaria. Expone Swagger interactivo en `/docs`.
 
 **Por qué existe / cómo aporta:** ningún otro servicio valida contraseñas ni emite tokens — todos los demás confían en el JWT que este servicio firma. Es el único que toca directamente las contraseñas de los usuarios, así que es también la pieza donde más importa la seguridad (hashing con bcrypt, expiración de token, CORS restringido).
 
@@ -201,7 +206,7 @@ docker exec redis redis-cli get analysis:total_eventos
 
 **Qué es:** el gestor del ciclo de vida de alertas — Node.js/Express + PostgreSQL + RabbitMQ (el único servicio de aplicación que no es Python/React, a propósito, para practicar un stack políglota).
 
-**Qué se implementa aquí:** un consumidor amqplib lee la cola `alerts_queue` (binding `alerts.#`) y persiste cada alerta en PostgreSQL (`alerts_db.alerts`, con el evento original en una columna JSONB). Sobre esa tabla expone la API de gestión: `GET /alerts` con filtros por severidad y estado, `GET /alerts/stats` con conteos agregados, y `PATCH /alerts/:id` para el ciclo de vida del incidente (nueva → reconocida → cerrada). Al arrancar crea `alerts_db` y la tabla por sí mismo si no existen.
+**Qué se implementa aquí:** un consumidor amqplib lee la cola `alerts_queue` (binding `alerts.#`) y persiste cada alerta en PostgreSQL (`alerts_db.alerts`, con el evento original en una columna JSONB). Sobre esa tabla expone la API de gestión: `GET /alerts` con filtros por severidad y estado, `GET /alerts/stats` con conteos agregados, y `PATCH /alerts/:id` para el ciclo de vida del incidente (nueva → reconocida → cerrada) — este último protegido con JWT y rol `admin` (Semana 10), verificado con la misma `JWT_SECRET_KEY` que firma auth-service. Al arrancar crea `alerts_db` y la tabla por sí mismo si no existen.
 
 **Por qué existe / cómo aporta:** las alertas del Analysis Service serían efímeras (se perderían al reiniciar) — este servicio las convierte en incidentes persistentes y gestionables, que es justo el objetivo final del proyecto: "ver alertas activas con su severidad" desde el dashboard y poder cerrarlas.
 
@@ -263,7 +268,7 @@ Explicación detallada de cada comando y script (`docker compose build`, `run_lo
 
 | Método | Endpoint | Tags | Descripción |
 |--------|----------|------|-------------|
-| `POST` | `/auth/register` | Auth | Registrar un nuevo usuario (rol `user` por defecto) |
+| `POST` | `/auth/register` | Auth | Registrar un nuevo usuario (rol `analista` por defecto) |
 | `POST` | `/auth/login` | Auth | Obtener token JWT Bearer |
 | `GET` | `/auth/me` | Auth | Perfil del usuario activo decodificado desde JWT |
 | `GET` | `/auth/users` | Auth | Listar usuarios (solo `admin`) |

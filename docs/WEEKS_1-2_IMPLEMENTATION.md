@@ -145,7 +145,7 @@ All endpoints are documented interactively at `http://localhost:8000/docs` (Swag
 ### Authentication Endpoints
 
 #### `POST /auth/register`
-**Register a new user** (creates account with role = `user`)
+**Register a new user** (creates account with role = `analista`)
 
 **Request body:**
 ```json
@@ -162,7 +162,7 @@ All endpoints are documented interactively at `http://localhost:8000/docs` (Swag
   "id": 2,
   "username": "john_doe",
   "email": "john@example.com",
-  "role": "user",
+  "role": "analista",
   "created_at": "2026-07-02T10:30:45.123Z"
 }
 ```
@@ -290,7 +290,7 @@ Authorization: Bearer <token>  (admin token)
     "id": 2,
     "username": "john_doe",
     "email": "john@example.com",
-    "role": "user",
+    "role": "analista",
     "created_at": "2026-07-02T10:30:45.123Z"
   }
 ]
@@ -487,7 +487,7 @@ CREATE TABLE users (
     username VARCHAR(50) UNIQUE NOT NULL,
     email VARCHAR(100) UNIQUE NOT NULL,
     hashed_password VARCHAR NOT NULL,
-    role VARCHAR(20) DEFAULT 'user',  -- 'user' or 'admin'
+    role VARCHAR(20) DEFAULT 'analista',  -- 'analista' or 'admin'
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
@@ -670,7 +670,7 @@ Log entries are sent as JSON to `POST /logs`:
 {
   "service": "auth-service",
   "level": "INFO",
-  "message": "Usuario registrado exitosamente: 'john_doe' con rol 'user'.",
+  "message": "Usuario registrado exitosamente: 'john_doe' con rol 'analista'.",
   "timestamp": "2026-07-02T10:30:45.123Z"
 }
 ```

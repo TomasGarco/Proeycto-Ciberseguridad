@@ -1,3 +1,4 @@
+import json
 import os
 import time
 import platform
@@ -21,6 +22,25 @@ from passlib.context import CryptContext
 from jose import JWTError, jwt
 from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
+
+# ============================================================
+# LOGGING ESTRUCTURADO
+# ============================================================
+# Un objeto JSON por línea en stdout — mismo campo base (timestamp, service,
+# level, category, message) en los 5 servicios del proyecto, para que
+# `docker compose logs` sea parseable por herramientas externas en vez de
+# texto libre. No reemplaza a send_log() (que manda el evento al Log Service
+# para guardarlo en Mongo/RabbitMQ) — esto es solo la salida por consola del
+# propio proceso.
+def log_event(level: str, category: str, message: str):
+    print(json.dumps({
+        "timestamp": datetime.utcnow().isoformat(),
+        "service": "auth-service",
+        "level": level,
+        "category": category,
+        "message": message,
+    }))
+
 
 # ============================================================
 # CONFIGURATION
@@ -88,9 +108,9 @@ def send_log(level: str, message: str):
         }
         res = requests.post(f"{LOG_SERVICE_URL}/logs", json=payload, timeout=2.0)
         if res.status_code != 201:
-            print(f"[LOG ERROR] El servicio de logs respondió con código {res.status_code}")
+            log_event("ERROR", "LOG_SERVICE", f"El servicio de logs respondió con código {res.status_code}")
     except Exception as e:
-        print(f"[LOG ERROR] No se pudo conectar al Log Service: {e}")
+        log_event("ERROR", "LOG_SERVICE", f"No se pudo conectar al Log Service: {e}")
 
 # ============================================================
 # DATABASE CONNECTIONS — PostgreSQL (Semana 4)
@@ -119,7 +139,7 @@ def _wait_for_postgres(engine, label: str, retries: int = 15, delay_seconds: flo
         except OperationalError:
             if attempt == retries:
                 raise
-            print(f"[DB] Esperando a que '{label}' esté disponible... (intento {attempt}/{retries})")
+            log_event("INFO", "DB", f"Esperando a que '{label}' esté disponible... (intento {attempt}/{retries})")
             time.sleep(delay_seconds)
 
 
@@ -169,7 +189,7 @@ class UserORM(AuthBase):
     username        = Column(String(50), unique=True, index=True, nullable=False)
     email           = Column(String(100), unique=True, index=True, nullable=False)
     hashed_password = Column(String, nullable=False)
-    role            = Column(String(20), default="user")  # "user" | "admin"
+    role            = Column(String(20), default="analista")  # "analista" | "admin"
     created_at      = Column(DateTime, default=datetime.utcnow)
 
 
@@ -223,8 +243,8 @@ class UserRoleUpdate(BaseModel):
     @field_validator("role")
     @classmethod
     def role_valido(cls, v: str) -> str:
-        if v not in ("user", "admin"):
-            raise ValueError("El rol debe ser 'user' o 'admin'.")
+        if v not in ("analista", "admin"):
+            raise ValueError("El rol debe ser 'analista' o 'admin'.")
         return v
 
 class PasswordChange(BaseModel):
@@ -610,7 +630,7 @@ async def swagger_ui_redirect():
 )
 def register(user_data: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_auth_db)):
     """
-    Crea una cuenta de usuario con rol **`user`** por defecto. El rol `admin` no puede
+    Crea una cuenta de usuario con rol **`analista`** por defecto. El rol `admin` no puede
     asignarse desde este endpoint — un administrador existente puede promover la cuenta
     después con **`PATCH /auth/users/{user_id}/role`**.
 
@@ -634,7 +654,7 @@ def register(user_data: UserCreate, background_tasks: BackgroundTasks, db: Sessi
         username=user_data.username,
         email=user_data.email,
         hashed_password=hash_password(user_data.password),
-        role="user"
+        role="analista"
     )
     db.add(user)
     db.commit()
@@ -784,7 +804,7 @@ def update_user_role(
     db: Session = Depends(get_auth_db)
 ):
     """
-    Promueve o degrada a un usuario entre los roles `user` y `admin`.
+    Promueve o degrada a un usuario entre los roles `analista` y `admin`.
     **Requiere rol de administrador.** Un admin no puede cambiar su propio rol
     (evita quedarse sin administradores o una auto-degradación por error) —
     para eso, otro administrador debe hacerlo.
@@ -824,7 +844,7 @@ def get_items(
 ):
     """
     Devuelve el inventario paginado (`skip`/`limit`). **Requiere autenticación**
-    (cualquier rol: `user` o `admin`). Consulta `items_db`, independiente
+    (cualquier rol: `analista` o `admin`). Consulta `items_db`, independiente
     de la base de usuarios.
     """
     return db.query(ItemORM).offset(skip).limit(limit).all()
@@ -1939,7 +1959,7 @@ def read_root():
             const data = await resp.json();
             me = data;
             document.getElementById('s-user').textContent = me.username;
-            document.getElementById('s-role').innerHTML = (me.role === 'admin' ? ICONS.crown : ICONS.user) + ' ' + (me.role === 'admin' ? 'Admin' : 'User');
+            document.getElementById('s-role').innerHTML = (me.role === 'admin' ? ICONS.crown : ICONS.user) + ' ' + (me.role === 'admin' ? 'Admin' : 'Analista');
             document.getElementById('hdr-right').innerHTML = '<span class="badge badge-green"><span class="dot"></span>' + me.username + '</span>';
 
             showApp();

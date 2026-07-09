@@ -146,7 +146,7 @@ Actualizado en Semana 4: ambas bases migraron de SQLite a PostgreSQL (`auth_db`,
 └────┴───────────┴─────────────────┴─────┘
      │
      ├─ hashed_password: $2b$12$N9qo8uLOAe...
-     ├─ role: "admin" / "user"
+     ├─ role: "admin" / "analista"
      └─ created_at: 2026-07-02T10:30:00
 ```
 
@@ -225,7 +225,7 @@ Actualizado en Semana 4: ambas bases migraron de SQLite a PostgreSQL (`auth_db`,
     │ │ {                         │   │
     │ │   "sub": "john_doe",      │   │
     │ │   "user_id": 2,           │   │
-    │ │   "role": "user",         │   │
+    │ │   "role": "analista",     │   │
     │ │   "exp": 1684423200       │   │
     │ │ }                         │   │
     │ └───────────────────────────┘   │
@@ -296,7 +296,7 @@ Actualizado en Semana 4: ambas bases migraron de SQLite a PostgreSQL (`auth_db`,
 │         MATRIZ DE CONTROL DE ACCESO                 │
 ├─────────────────────────────────────────────────────┤
 
-ROLE: "user" (Usuario normal)
+ROLE: "analista" (Usuario normal)
   [SI] POST /auth/register          → Registrarse
   [SI] POST /auth/login              → Iniciar sesión
   [SI] GET  /auth/me                 → Ver su propio perfil
@@ -345,7 +345,7 @@ Capa 2: Autenticación
    └─ Validación en cada request
 
 Capa 3: Autorización
-   ├─ RBAC: roles "user" y "admin"
+   ├─ RBAC: roles "analista" y "admin"
    ├─ Dependencias: Depends(get_current_user)
    ├─ Control granular por endpoint
    └─ 403 Forbidden si no autorizado

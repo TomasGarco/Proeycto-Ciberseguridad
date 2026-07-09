@@ -75,7 +75,7 @@ export default function UsersPage({ user }) {
                   ) : editingId === u.id ? (
                     <>
                       <select value={pendingRole} onChange={(e) => setPendingRole(e.target.value)}>
-                        <option value="user">user</option>
+                        <option value="analista">analista</option>
                         <option value="admin">admin</option>
                       </select>
                       {pendingRole !== u.role ? (

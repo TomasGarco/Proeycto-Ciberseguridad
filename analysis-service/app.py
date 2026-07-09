@@ -15,6 +15,19 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+# Logging operacional del propio proceso (conexión a RabbitMQ/Redis, eventos
+# consumidos, alertas disparadas) — un objeto JSON por línea en stdout, mismo
+# formato que auth-service/log-service.
+def log_event(level: str, category: str, message: str):
+    print(json.dumps({
+        "timestamp": datetime.utcnow().isoformat(),
+        "service": "analysis-service",
+        "level": level,
+        "category": category,
+        "message": message,
+    }))
+
+
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "localhost")
 RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", "5672"))
 RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
@@ -178,13 +191,13 @@ def _connect_redis(retries: int = 5, delay_seconds: float = 2.0):
     for attempt in range(1, retries + 1):
         try:
             client.ping()
-            print(f"[REDIS] Conectado a Redis en {REDIS_HOST}:{REDIS_PORT}")
+            log_event("INFO", "REDIS", f"Conectado a Redis en {REDIS_HOST}:{REDIS_PORT}")
             return client
         except redis.exceptions.RedisError as e:
             if attempt == retries:
-                print(f"[REDIS] Sin conexión tras {retries} intentos ({e}) — contadores solo en memoria.")
+                log_event("WARNING", "REDIS", f"Sin conexión tras {retries} intentos ({e}) — contadores solo en memoria.")
                 return None
-            print(f"[REDIS] Esperando a Redis... (intento {attempt}/{retries})")
+            log_event("INFO", "REDIS", f"Esperando a Redis... (intento {attempt}/{retries})")
             time.sleep(delay_seconds)
 
 
@@ -207,7 +220,7 @@ def _restore_stats_from_redis():
             except json.JSONDecodeError:
                 continue
     if _stats["total_eventos"]:
-        print(f"[REDIS] Contadores restaurados: {_stats['total_eventos']} eventos, {_stats['alertas_generadas']} alertas.")
+        log_event("INFO", "REDIS", f"Contadores restaurados: {_stats['total_eventos']} eventos, {_stats['alertas_generadas']} alertas.")
 
 
 def _persist_event_to_redis(event: dict, level: str, service: str, alerts: List[dict], timestamp: str):
@@ -228,7 +241,7 @@ def _persist_event_to_redis(event: dict, level: str, service: str, alerts: List[
                 pipe.hincrby("analysis:alertas_por_severidad", alert["severity"], 1)
         pipe.execute()
     except redis.exceptions.RedisError as e:
-        print(f"[REDIS] No se pudo persistir el evento ({e}) — el contador en memoria sigue al día.")
+        log_event("WARNING", "REDIS", f"No se pudo persistir el evento ({e}) — el contador en memoria sigue al día.")
 
 
 if REDIS_HOST:
@@ -246,12 +259,12 @@ def _wait_for_rabbitmq(retries: int = 15, delay_seconds: float = 2.0) -> pika.Bl
     for attempt in range(1, retries + 1):
         try:
             connection = pika.BlockingConnection(params)
-            print(f"[MQ] Conectado a RabbitMQ en {RABBITMQ_HOST}:{RABBITMQ_PORT}")
+            log_event("INFO", "RABBITMQ", f"Conectado a RabbitMQ en {RABBITMQ_HOST}:{RABBITMQ_PORT}")
             return connection
         except pika.exceptions.AMQPConnectionError:
             if attempt == retries:
                 raise
-            print(f"[MQ] Esperando a RabbitMQ... (intento {attempt}/{retries})")
+            log_event("INFO", "RABBITMQ", f"Esperando a RabbitMQ... (intento {attempt}/{retries})")
             time.sleep(delay_seconds)
 
 
@@ -267,7 +280,7 @@ def _on_message(channel, method, properties, body):
     try:
         event = json.loads(body)
     except json.JSONDecodeError:
-        print(f"[ANALYSIS] Mensaje descartado (JSON inválido): {body[:200]!r}")
+        log_event("WARNING", "ANALYSIS", f"Mensaje descartado (JSON inválido): {body[:200]!r}")
         channel.basic_ack(delivery_tag=method.delivery_tag)
         return
 
@@ -283,7 +296,7 @@ def _on_message(channel, method, properties, body):
             body=json.dumps(alert, ensure_ascii=False),
             properties=pika.BasicProperties(delivery_mode=2, content_type="application/json"),
         )
-        print(f"[ALERTA] ({alert['severity'].upper()}) {alert['message']} — regla '{alert['rule_id']}'")
+        log_event("WARNING", "ALERTA", f"({alert['severity'].upper()}) {alert['message']} — regla '{alert['rule_id']}'")
 
     with _stats_lock:
         _stats["total_eventos"] += 1
@@ -297,7 +310,7 @@ def _on_message(channel, method, properties, body):
 
     _persist_event_to_redis(event, level, service, alerts, received_at)
 
-    print(f"[ANALYSIS] Evento consumido ({method.routing_key}): [{service}] [{level}] {event.get('message', '')}")
+    log_event("INFO", "ANALYSIS", f"Evento consumido ({method.routing_key}): [{service}] [{level}] {event.get('message', '')}")
     channel.basic_ack(delivery_tag=method.delivery_tag)
 
 
@@ -316,10 +329,10 @@ def _consume_loop():
             channel.queue_bind(queue=ANALYSIS_QUEUE, exchange=LOGS_EXCHANGE, routing_key=BINDING_KEY)
             channel.basic_qos(prefetch_count=10)
             channel.basic_consume(queue=ANALYSIS_QUEUE, on_message_callback=_on_message)
-            print(f"[MQ] Consumiendo de la cola '{ANALYSIS_QUEUE}' (binding '{BINDING_KEY}')")
+            log_event("INFO", "RABBITMQ", f"Consumiendo de la cola '{ANALYSIS_QUEUE}' (binding '{BINDING_KEY}')")
             channel.start_consuming()
         except Exception as e:
-            print(f"[MQ] Conexión perdida ({e}); reintentando en 3s...")
+            log_event("ERROR", "RABBITMQ", f"Conexión perdida ({e}); reintentando en 3s...")
             time.sleep(3)
 
 

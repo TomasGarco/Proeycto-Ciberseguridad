@@ -16,6 +16,21 @@ import pika
 
 START_TIME = time.time()
 
+
+# Logging operacional del propio proceso (conexión a Mongo/RabbitMQ, errores
+# internos) — un objeto JSON por línea en stdout. Distinto del evento de
+# negocio que llega por POST /logs y se persiste en Mongo: eso sigue guardado
+# tal cual, con su propio timestamp/nivel/mensaje.
+def log_event(level: str, category: str, message: str):
+    print(json.dumps({
+        "timestamp": datetime.now().isoformat(),
+        "service": "log-service",
+        "level": level,
+        "category": category,
+        "message": message,
+    }))
+
+
 MONGO_HOST = os.getenv("MONGO_HOST", "localhost")
 MONGO_PORT = int(os.getenv("MONGO_PORT", "27017"))
 MONGO_DATABASE = os.getenv("MONGO_DATABASE", "logs_db")
@@ -64,21 +79,21 @@ def publish_event(event: dict):
             properties=pika.BasicProperties(delivery_mode=2, content_type="application/json"),
         )
         connection.close()
-        print(f"[RABBITMQ] Evento publicado con routing key '{routing_key}'")
+        log_event("INFO", "RABBITMQ", f"Evento publicado con routing key '{routing_key}'")
     except Exception as e:
-        print(f"[RABBITMQ] No se pudo publicar el evento: {e}")
+        log_event("ERROR", "RABBITMQ", f"No se pudo publicar el evento: {e}")
 
 def _wait_for_mongodb(retries: int = 15, delay_seconds: float = 2.0):
     for attempt in range(1, retries + 1):
         try:
             client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=3000)
             client.admin.command('ping')
-            print(f"[DB] Conectado a MongoDB en {MONGO_HOST}:{MONGO_PORT}")
+            log_event("INFO", "DB", f"Conectado a MongoDB en {MONGO_HOST}:{MONGO_PORT}")
             return client
         except ConnectionFailure:
             if attempt == retries:
                 raise
-            print(f"[DB] Esperando a MongoDB... (intento {attempt}/{retries})")
+            log_event("INFO", "DB", f"Esperando a MongoDB... (intento {attempt}/{retries})")
             time.sleep(delay_seconds)
 
 mongo_client = _wait_for_mongodb()
@@ -128,24 +143,23 @@ def health_check():
         python_version=sys.version,
     )
 
-COLORS = {
-    "INFO": "\033[92m",    # Green
-    "WARNING": "\033[93m", # Yellow
-    "ERROR": "\033[91m",   # Red
-    "DEBUG": "\033[96m",   # Cyan
-    "RESET": "\033[0m"
-}
-
 @app.post("/logs", status_code=status.HTTP_201_CREATED, tags=["Logs"])
 def create_log(entry: LogEntry):
     """
     Registra un evento de log enviado por cualquier microservicio en MongoDB.
     """
     ts = entry.timestamp or datetime.now().isoformat()
-    log_msg = f"[{ts}] [{entry.service.upper()}] [{entry.level.upper()}] - {entry.message}"
 
-    color = COLORS.get(entry.level.upper(), COLORS["RESET"])
-    print(f"{color}{log_msg}{COLORS['RESET']}")
+    # Eco del evento de negocio recibido — no es el log operacional del propio
+    # proceso (ese usa log_event con category fija "LOG_SERVICE"); acá el
+    # "service"/"level" vienen del emisor original (auth-service, etc.).
+    print(json.dumps({
+        "timestamp": ts,
+        "service": entry.service,
+        "level": entry.level.upper(),
+        "category": "EVENTO_RECIBIDO",
+        "message": entry.message,
+    }))
 
     entry_dict = entry.model_dump()
     entry_dict["timestamp"] = ts
@@ -153,7 +167,7 @@ def create_log(entry: LogEntry):
     try:
         result = logs_collection.insert_one(entry_dict)
     except Exception as e:
-        print(f"[ERROR] No se pudo guardar el log en MongoDB: {e}")
+        log_event("ERROR", "DB", f"No se pudo guardar el log en MongoDB: {e}")
         raise HTTPException(status_code=500, detail="Error al guardar el log")
 
     # insert_one muta entry_dict añadiendo el ObjectId (no serializable a JSON):
@@ -183,7 +197,7 @@ def get_logs(limit: int = 100, service: Optional[str] = None, level: Optional[st
 
         return logs[::-1]
     except Exception as e:
-        print(f"[ERROR] Error al obtener logs de MongoDB: {e}")
+        log_event("ERROR", "DB", f"Error al obtener logs de MongoDB: {e}")
         return []
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)

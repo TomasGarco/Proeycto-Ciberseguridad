@@ -124,6 +124,7 @@ services:
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=${RABBITMQ_DEFAULT_USER:-guest}
       - RABBITMQ_PASSWORD=${RABBITMQ_DEFAULT_PASS:-guest}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-changeme-super-secret-key-for-jwt-in-production}
     depends_on:
       postgres:
         condition: service_healthy

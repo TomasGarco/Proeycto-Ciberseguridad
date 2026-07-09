@@ -26,7 +26,9 @@ La comunicación es asíncrona en dos tramos vía RabbitMQ: Log Service publica 
 
 ## 4. El roadmap de 10 semanas — qué está hecho y qué no
 
-Semanas 1–9 completadas: autenticación JWT con roles (1–3), persistencia PostgreSQL y MongoDB (4–5), mensajería RabbitMQ (6), dashboard React (7), motor de reglas de detección + Alert Service con ciclo de vida de incidentes (8), Redis como capa de caché de estadísticas (9). Lo que queda por delante son refinamientos, no piezas de arquitectura.
+Semanas 1–9 completadas: autenticación JWT con roles (1–3), persistencia PostgreSQL y MongoDB (4–5), mensajería RabbitMQ (6), dashboard React (7), motor de reglas de detección + Alert Service con ciclo de vida de incidentes (8), Redis como capa de caché de estadísticas (9). La arquitectura objetivo quedó completa en la Semana 9 — lo que sigue son refinamientos de cierre, no piezas nuevas.
+
+**Semana 10 (refinamientos de cierre) — completada:** roles renombrados de `user`/`admin` a `analista`/`admin` en todo el stack (código, dashboard, docs y datos existentes migrados); JWT + verificación de rol `admin` agregado a `PATCH /alerts/:id` en Alert Service (antes sin autenticación); datos de prueba eliminados (usuarios `test_ui_check`/`demo_682280`/`analista1`, alertas de verificación de la Semana 8); guion de demo verificado end-to-end; **logging operacional estructurado en JSON** en los 5 servicios (un objeto por línea en stdout — `timestamp`/`service`/`level`/`category`/`message` — en vez de texto libre con `print()`/`console.log()`).
 
 ## 5. La arquitectura final (completa)
 
@@ -65,6 +67,6 @@ Cada comando de Docker Compose, cada script (`run_local.bat`, `test_crud.py`) y 
 | "¿Qué pasa si el token expira?" | `docs/WEEKS_1-2_IMPLEMENTATION.md` → "Token expired" en Troubleshooting |
 | "¿Por qué colas de mensajes y no HTTP entre servicios?" | Este documento, sección 3, y `README.md` → sección de RabbitMQ (desacople: un servicio caído no tumba a los demás) |
 | "¿Qué le falta al proyecto para estar completo?" | Este documento, secciones 4 y 5 (la arquitectura está completa; lo excluido a propósito —ML, cloud, SOAR— está en el alcance del proyecto) |
-| "¿Cómo se controla qué puede hacer un admin vs un user?" | `docs/ARCHITECTURE_VISUAL_GUIDE.md` → sección 5 (RBAC) |
+| "¿Cómo se controla qué puede hacer un admin vs un analista?" | `docs/ARCHITECTURE_VISUAL_GUIDE.md` → sección 5 (RBAC) |
 | "¿Cómo pruebo la API sin escribir código?" | `docs/WEEKS_1-2_IMPLEMENTATION.md` → "Testing Endpoints" (Swagger UI en `/docs`) |
 | "¿Qué hace exactamente cada comando/script del proyecto?" | `docs/WEEKS_1-2_IMPLEMENTATION.md` → "Command & Script Reference" |

@@ -192,7 +192,7 @@ Base.metadata.create_all(bind=items_engine)
 | username | `String(50)` | unique=True, index=True, nullable=False |
 | email | `String(100)` | unique=True, index=True, nullable=False |
 | hashed_password | `String` | nullable=False |
-| role | `String(20)` | default=user |
+| role | `String(20)` | default=analista |
 | created_at | `DateTime` | default=datetime.utcnow |
 <!-- AUTO-GENERATED:END:auth-orm -->
 
@@ -299,7 +299,7 @@ POST /auth/register  →  UserCreate
 { "username": "john_doe", "email": "john@example.com", "password": "password123" }
 
 Response  →  UserResponse
-{ "id": 2, "username": "john_doe", "email": "john@example.com", "role": "user", "created_at": "2026-07-02T11:00:00" }
+{ "id": 2, "username": "john_doe", "email": "john@example.com", "role": "analista", "created_at": "2026-07-02T11:00:00" }
 
 POST /api/items  →  ItemCreate
 { "name": "Auriculares", "description": "Inalámbricos con cancelación de ruido", "price": 120.00, "is_offer": true }
@@ -492,7 +492,7 @@ def update_item(item_id: int, _: UserORM = Depends(require_admin)):
     "id": 2,
     "username": "john_doe",
     "email": "john@example.com",
-    "role": "user",
+    "role": "analista",
     "created_at": "2026-07-02T11:00:00"
 }
 ```
@@ -513,7 +513,7 @@ def register(user_data: UserCreate, background_tasks: BackgroundTasks, db: Sessi
         username=user_data.username,
         email=user_data.email,
         hashed_password=hash_password(user_data.password),
-        role="user"  # Por defecto rol "user"
+        role="analista"  # Por defecto rol "analista"
     )
     
     # 3. Guarda en BD
@@ -630,7 +630,7 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
         "id": 2,
         "username": "john_doe",
         "email": "john@example.com",
-        "role": "user",
+        "role": "analista",
         "created_at": "2026-07-02T11:00:00"
     }
 ]
@@ -1004,7 +1004,7 @@ El dashboard es una página HTML embebida en el endpoint GET `/`:
 | **Contraseñas** | Hasheadas con bcrypt (no texto plano) |
 | **Tokens** | JWT firmados con SECRET_KEY |
 | **Expiración** | 60 minutos (configurable) |
-| **Roles** | RBAC: "user" vs "admin" |
+| **Roles** | RBAC: "analista" vs "admin" |
 | **Endpoints protegidos** | Todos requieren `Depends(get_current_user)` |
 | **CORS** | Habilitado para todos los orígenes |
 | **HTTPS** | No configurado — pendiente para producción |

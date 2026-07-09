@@ -269,7 +269,7 @@ export default function LoginPage({ onLogin }) {
             <button className="btn primary" type="submit" disabled={busy || !registerReady}>
               {busy ? "Creando cuenta…" : "Crear cuenta"}
             </button>
-            <p className="hint">Las cuentas nuevas se crean con rol <code>user</code>.</p>
+            <p className="hint">Las cuentas nuevas se crean con rol <code>analista</code>.</p>
           </form>
         )}
       </div>

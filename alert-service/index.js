@@ -1,10 +1,28 @@
 const express = require("express");
 const os = require("os");
 const amqp = require("amqplib");
+const jwt = require("jsonwebtoken");
 const { Client, Pool } = require("pg");
 
 const PORT = process.env.PORT || 8003;
 const START_TIME = Date.now();
+
+// Logging operacional del propio proceso — un objeto JSON por línea en
+// stdout, mismo formato que los 3 servicios Python del proyecto.
+function logEvent(level, category, message) {
+  console.log(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    service: "alert-service",
+    level,
+    category,
+    message,
+  }));
+}
+
+// Misma clave y algoritmo que auth-service (create_access_token en app.py) —
+// alert-service no emite tokens, solo verifica los que auth-service firmó.
+const JWT_SECRET_KEY = process.env.JWT_SECRET_KEY || "changeme-super-secret-key-for-jwt-in-production";
+const JWT_ALGORITHM = "HS256";
 
 const POSTGRES_HOST = process.env.POSTGRES_HOST || "localhost";
 const POSTGRES_PORT = parseInt(process.env.POSTGRES_PORT || "5432", 10);
@@ -45,12 +63,12 @@ async function waitForPostgres(retries = 15, delayMs = 2000) {
     });
     try {
       await client.connect();
-      console.log(`[DB] Conectado a PostgreSQL en ${POSTGRES_HOST}:${POSTGRES_PORT}`);
+      logEvent("INFO", "DB", `Conectado a PostgreSQL en ${POSTGRES_HOST}:${POSTGRES_PORT}`);
       return client;
     } catch (err) {
       await client.end().catch(() => {});
       if (attempt === retries) throw err;
-      console.log(`[DB] Esperando a PostgreSQL... (intento ${attempt}/${retries})`);
+      logEvent("INFO", "DB", `Esperando a PostgreSQL... (intento ${attempt}/${retries})`);
       await sleep(delayMs);
     }
   }
@@ -63,7 +81,7 @@ async function ensureDatabase(client) {
   const { rows } = await client.query("SELECT 1 FROM pg_database WHERE datname = $1", [ALERTS_DB]);
   if (rows.length === 0) {
     await client.query(`CREATE DATABASE ${ALERTS_DB}`);
-    console.log(`[DB] Base de datos '${ALERTS_DB}' creada.`);
+    logEvent("INFO", "DB", `Base de datos '${ALERTS_DB}' creada.`);
   }
   await client.end();
 }
@@ -91,7 +109,7 @@ async function ensureSchema() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
-  console.log(`[DB] Tabla 'alerts' lista en '${ALERTS_DB}'.`);
+  logEvent("INFO", "DB", `Tabla 'alerts' lista en '${ALERTS_DB}'.`);
   return alertsPool;
 }
 
@@ -111,13 +129,13 @@ async function consumeLoop() {
         password: RABBITMQ_PASSWORD,
         heartbeat: 60,
       });
-      console.log(`[MQ] Conectado a RabbitMQ en ${RABBITMQ_HOST}:${RABBITMQ_PORT}`);
+      logEvent("INFO", "RABBITMQ", `Conectado a RabbitMQ en ${RABBITMQ_HOST}:${RABBITMQ_PORT}`);
       const channel = await connection.createChannel();
       await channel.assertExchange(ALERTS_EXCHANGE, "topic", { durable: true });
       await channel.assertQueue(ALERTS_QUEUE, { durable: true });
       await channel.bindQueue(ALERTS_QUEUE, ALERTS_EXCHANGE, BINDING_KEY);
       await channel.prefetch(10);
-      console.log(`[MQ] Consumiendo de la cola '${ALERTS_QUEUE}' (binding '${BINDING_KEY}')`);
+      logEvent("INFO", "RABBITMQ", `Consumiendo de la cola '${ALERTS_QUEUE}' (binding '${BINDING_KEY}')`);
 
       // La promesa solo se rechaza cuando la conexión muere — mantiene vivo
       // el bucle y dispara la reconexión del catch.
@@ -130,7 +148,7 @@ async function consumeLoop() {
           try {
             alert = JSON.parse(msg.content.toString());
           } catch {
-            console.error(`[ALERTAS] Mensaje descartado (JSON inválido): ${msg.content.toString().slice(0, 200)}`);
+            logEvent("WARNING", "ALERTAS", `Mensaje descartado (JSON inválido): ${msg.content.toString().slice(0, 200)}`);
             channel.ack(msg);
             return;
           }
@@ -148,17 +166,17 @@ async function consumeLoop() {
                 alert.triggering_event ? JSON.stringify(alert.triggering_event) : null,
               ]
             );
-            console.log(`[ALERTAS] Alerta persistida (${String(alert.severity).toUpperCase()}): ${alert.message}`);
+            logEvent("INFO", "ALERTAS", `Alerta persistida (${String(alert.severity).toUpperCase()}): ${alert.message}`);
             channel.ack(msg);
           } catch (err) {
             // Sin ack: el mensaje vuelve a la cola y se reintenta.
-            console.error(`[ALERTAS] Error al insertar en Postgres: ${err.message}`);
+            logEvent("ERROR", "ALERTAS", `Error al insertar en Postgres: ${err.message}`);
             channel.nack(msg, false, true);
           }
         });
       });
     } catch (err) {
-      console.error(`[MQ] Conexión perdida (${err.message}); reintentando en 3s...`);
+      logEvent("ERROR", "RABBITMQ", `Conexión perdida (${err.message}); reintentando en 3s...`);
       await sleep(3000);
     }
   }
@@ -175,6 +193,29 @@ function requireDb(req, res, next) {
     return res.status(503).json({ detail: "El Alert Service aún está inicializando la base de datos." });
   }
   next();
+}
+
+// Verifica el JWT emitido por auth-service y exige rol admin — solo para el
+// endpoint que modifica el ciclo de vida de una alerta (PATCH). Las lecturas
+// (GET /alerts, /alerts/stats) siguen abiertas, mismo criterio que
+// log-service/analysis-service: el dashboard ya oculta estos botones a
+// usuarios no-admin, pero eso no impedía llamar el PATCH directo por HTTP.
+function requireAdmin(req, res, next) {
+  const authHeader = req.headers.authorization || "";
+  const [scheme, token] = authHeader.split(" ");
+  if (scheme !== "Bearer" || !token) {
+    return res.status(401).json({ detail: "Token de autenticación requerido." });
+  }
+  try {
+    const payload = jwt.verify(token, JWT_SECRET_KEY, { algorithms: [JWT_ALGORITHM] });
+    if (payload.role !== "admin") {
+      return res.status(403).json({ detail: "Esta acción requiere rol admin." });
+    }
+    req.user = payload;
+    next();
+  } catch (err) {
+    return res.status(401).json({ detail: "Token inválido o expirado." });
+  }
 }
 
 app.get("/api/health", (req, res) => {
@@ -209,7 +250,7 @@ app.get("/alerts", requireDb, async (req, res) => {
     );
     res.json(rows);
   } catch (err) {
-    console.error(`[API] Error consultando alertas: ${err.message}`);
+    logEvent("ERROR", "API", `Error consultando alertas: ${err.message}`);
     res.status(500).json({ detail: "Error interno consultando las alertas." });
   }
 });
@@ -228,20 +269,16 @@ app.get("/alerts/stats", requireDb, async (req, res) => {
       por_estado: Object.fromEntries(byStatus.rows.map((r) => [r.status, r.total])),
     });
   } catch (err) {
-    console.error(`[API] Error consultando estadísticas: ${err.message}`);
+    logEvent("ERROR", "API", `Error consultando estadísticas: ${err.message}`);
     res.status(500).json({ detail: "Error interno consultando las estadísticas." });
   }
 });
 
 // Cambia el estado de una alerta (ciclo de vida del incidente).
-//
-// Sin validación de rol aquí a propósito: el control de acceso (solo admin
-// puede reconocer/cerrar) vive en el dashboard, que oculta estos botones a
-// usuarios no-admin — mismo criterio que analysis-service y log-service, que
-// tampoco validan JWT. nginx es el único punto de entrada público del stack;
-// añadir auth solo a este endpoint sin cubrir los demás daría una falsa
-// sensación de seguridad sin cerrar el hueco real.
-app.patch("/alerts/:id", requireDb, async (req, res) => {
+// Requiere JWT válido con rol admin (ver requireAdmin) — es el único endpoint
+// de este servicio que modifica datos, por eso es el único que exige token;
+// las lecturas (GET) siguen abiertas, igual que en log-service/analysis-service.
+app.patch("/alerts/:id", requireDb, requireAdmin, async (req, res) => {
   const { status } = req.body || {};
   if (!VALID_STATUSES.includes(status)) {
     return res.status(400).json({ detail: `Estado inválido. Valores permitidos: ${VALID_STATUSES.join(", ")}.` });
@@ -260,7 +297,7 @@ app.patch("/alerts/:id", requireDb, async (req, res) => {
     }
     res.json(rows[0]);
   } catch (err) {
-    console.error(`[API] Error actualizando la alerta ${id}: ${err.message}`);
+    logEvent("ERROR", "API", `Error actualizando la alerta ${id}: ${err.message}`);
     res.status(500).json({ detail: "Error interno actualizando la alerta." });
   }
 });
@@ -270,7 +307,7 @@ app.patch("/alerts/:id", requireDb, async (req, res) => {
 // Express escucha de inmediato (así /api/health responde desde el primer
 // segundo); el aprovisionamiento de Postgres y el consumidor corren detrás.
 app.listen(PORT, () => {
-  console.log(`[alert-service] escuchando en el puerto ${PORT}`);
+  logEvent("INFO", "STARTUP", `alert-service escuchando en el puerto ${PORT}`);
 });
 
 (async () => {
@@ -280,7 +317,7 @@ app.listen(PORT, () => {
     pool = await ensureSchema();
     consumeLoop();
   } catch (err) {
-    console.error(`[alert-service] Error fatal en el arranque: ${err.message}`);
+    logEvent("ERROR", "STARTUP", `Error fatal en el arranque: ${err.message}`);
     process.exit(1);
   }
 })();
