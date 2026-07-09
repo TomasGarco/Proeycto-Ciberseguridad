@@ -2,6 +2,8 @@
 
 # Plataforma SOC/SIEM: Microservicios con Docker Compose
 
+Repositorio: [github.com/TomasGarco/Proeycto-Ciberseguridad](https://github.com/TomasGarco/Proeycto-Ciberseguridad)
+
 Arquitectura de microservicios independiente, estructurada en un monorepo. Consta de cinco servicios de aplicación: **Auth Service** (autenticación JWT, items y dashboard embebido), **Log Service** (recolector centralizado de logs con persistencia en MongoDB), **Analysis Service** (consumidor de eventos vía RabbitMQ con motor de reglas de detección y estadísticas persistidas en Redis), **Alert Service** (persistencia y ciclo de vida de alertas en PostgreSQL) y **Dashboard Service** (frontend React servido por nginx). Todo orquestado con **Docker Compose** junto a **PostgreSQL**, **MongoDB**, **RabbitMQ** y **Redis**.
 
 ---
@@ -167,6 +169,8 @@ docker exec postgres psql -U postgres -d alerts_db -c "SELECT id, rule_id, sever
 docker exec mongodb mongosh -u root -p root --quiet --eval "db.getSiblingDB('logs_db').logs.countDocuments()"
 docker exec redis redis-cli get analysis:total_eventos
 ```
+
+El puerto `5672` (AMQP) no tiene un comando de inspección equivalente — no es una base de datos con CLI de consulta, es el protocolo binario que usan los servicios entre sí para publicar/consumir mensajes. Su forma de inspección es la interfaz web de RabbitMQ en `:15672` (ver credenciales en `.env`), donde se pueden ver colas, exchanges y mensajes en vivo sin tocar la terminal.
 
 ---
 
