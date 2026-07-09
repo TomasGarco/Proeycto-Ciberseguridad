@@ -67,6 +67,7 @@ services:
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=${RABBITMQ_DEFAULT_USER:-guest}
       - RABBITMQ_PASSWORD=${RABBITMQ_DEFAULT_PASS:-guest}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-changeme-super-secret-key-for-jwt-in-production}
       - CORS_ORIGINS=${CORS_ORIGINS:-https://localhost}
     depends_on:
       mongodb:
@@ -95,6 +96,7 @@ services:
       - RABBITMQ_PASSWORD=${RABBITMQ_DEFAULT_PASS:-guest}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-changeme-super-secret-key-for-jwt-in-production}
       - CORS_ORIGINS=${CORS_ORIGINS:-https://localhost}
     depends_on:
       rabbitmq:

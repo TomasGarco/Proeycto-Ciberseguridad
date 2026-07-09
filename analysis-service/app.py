@@ -11,8 +11,10 @@ from typing import List
 
 import pika
 import redis
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError, jwt
 from pydantic import BaseModel, Field
 
 # Logging operacional del propio proceso (conexión a RabbitMQ/Redis, eventos
@@ -37,6 +39,26 @@ RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "guest")
 REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "https://localhost").split(",")]
+
+# Verificación de JWT (Semana 10): este servicio no emite tokens, solo
+# verifica los que auth-service firmó con la misma JWT_SECRET_KEY y
+# algoritmo HS256 — mismo patrón que alert-service/log-service.
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "changeme-super-secret-key-for-jwt-in-production")
+JWT_ALGORITHM = "HS256"
+_bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def require_authenticated(credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme)):
+    """Exige un JWT válido de auth-service (cualquier rol) para /stats,
+    /events/recent y /rules — las ve tanto `analista` como `admin` en el
+    dashboard, así que no se restringe por rol, solo por autenticación."""
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Token de autenticación requerido.")
+    try:
+        payload = jwt.decode(credentials.credentials, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Token inválido o expirado.")
+    return payload
 
 LOGS_EXCHANGE = "logs_events"
 ANALYSIS_QUEUE = "analysis_queue"
@@ -385,8 +407,8 @@ def health_check():
 
 
 @app.get("/stats", tags=["Análisis"])
-def get_stats():
-    """Estadísticas agregadas de los eventos consumidos desde RabbitMQ."""
+def get_stats(_: dict = Depends(require_authenticated)):
+    """Estadísticas agregadas de los eventos consumidos desde RabbitMQ. **Requiere estar autenticado.**"""
     with _stats_lock:
         return {
             "total_eventos": _stats["total_eventos"],
@@ -401,14 +423,14 @@ def get_stats():
 
 
 @app.get("/rules", response_model=List[dict], tags=["Análisis"])
-def get_rules():
-    """Reglas de detección configuradas en el motor de análisis."""
+def get_rules(_: dict = Depends(require_authenticated)):
+    """Reglas de detección configuradas en el motor de análisis. **Requiere estar autenticado.**"""
     return [{k: v for k, v in rule.items() if k != "pattern_re"} for rule in RULES]
 
 
 @app.get("/events/recent", response_model=List[dict], tags=["Análisis"])
-def get_recent_events(limit: int = 20):
-    """Últimos eventos consumidos (máximo 50 en memoria), del más reciente al más antiguo."""
+def get_recent_events(limit: int = 20, _: dict = Depends(require_authenticated)):
+    """Últimos eventos consumidos (máximo 50 en memoria), del más reciente al más antiguo. **Requiere estar autenticado.**"""
     with _stats_lock:
         events = list(_recent_events)
     return events[::-1][:limit]

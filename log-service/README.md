@@ -10,18 +10,20 @@ El origen de cada evento es el campo libre `service` del payload (por ejemplo `"
 
 ## Endpoints principales
 
-| Método | Endpoint | Descripción |
-|---|---|---|
-| `GET` | `/` | Consola web de monitoreo con auto-refresco |
-| `POST` | `/logs` | Registra un evento: `{service, level, message, timestamp}` |
-| `GET` | `/logs` | Consulta/filtra logs almacenados en MongoDB |
-| `GET` | `/api/health` | Estado del servicio |
+| Método | Endpoint | Auth requerida | Descripción |
+|---|---|---|---|
+| `GET` | `/` | ninguna | Consola web de monitoreo con auto-refresco |
+| `POST` | `/logs` | ninguna | Registra un evento: `{service, level, message, timestamp}` |
+| `GET` | `/logs` | JWT (cualquier rol) | Consulta/filtra logs almacenados en MongoDB |
+| `GET` | `/api/health` | ninguna | Estado del servicio |
 
 Swagger/OpenAPI (autogenerado por FastAPI): `http://localhost:8010/docs`.
 
+**Autenticación (Semana 10):** `GET /logs` exige un JWT válido emitido por auth-service — no restringe por rol (la pestaña Logs del dashboard la ve tanto `analista` como `admin`), solo exige estar autenticado. `POST /logs` queda abierto a propósito: lo llaman los propios servicios del stack para reportar eventos (por ejemplo, auth-service reportando un login fallido), no personas — exigirle JWT ahí requeriría que cada servicio tuviera su propio token, algo que no existe hoy.
+
 ## Variables de entorno
 
-`MONGO_HOST/PORT/DATABASE/USERNAME/PASSWORD`, `RABBITMQ_HOST/PORT/USER/PASSWORD` (opcional — sin `RABBITMQ_HOST` el servicio funciona solo con Mongo, sin publicar a la cola), `CORS_ORIGINS`. Ver `.env.example` en la raíz.
+`MONGO_HOST/PORT/DATABASE/USERNAME/PASSWORD`, `RABBITMQ_HOST/PORT/USER/PASSWORD` (opcional — sin `RABBITMQ_HOST` el servicio funciona solo con Mongo, sin publicar a la cola), `JWT_SECRET_KEY` (debe ser la misma que usa auth-service para firmar los tokens), `CORS_ORIGINS`. Ver `.env.example` en la raíz.
 
 ## Logging
 

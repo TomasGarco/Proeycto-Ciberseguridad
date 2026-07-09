@@ -118,6 +118,11 @@ python-docker-service/
 ├── certs/                  Certificado TLS de desarrollo (no versionado)
 │   └── generate-dev-cert.sh      Genera certs/dev.crt y certs/dev.key
 │
+├── scripts/
+│   ├── backup.sh           Exporta las 4 bases (Postgres x3 + MongoDB) con timestamp
+│   ├── restore.sh          Restaura un backup generado por backup.sh
+│   └── gen_docs.py         Regenera docs/AUTH_SERVICE_ARCHITECTURE.md desde el código
+│
 ├── docker-compose.yml      Orquestación de contenedores, red y volúmenes
 ├── .env.example            Plantilla de variables de entorno/credenciales (copiar a .env)
 ├── run_local.bat           Script para iniciar los servicios Python localmente (usa SQLite)
@@ -162,6 +167,24 @@ El Dashboard Service sirve por HTTPS en el puerto `443` (`https://localhost`); e
 El tramo nginx → microservicios backend (Auth, Log, Analysis, Alert) sigue en HTTP plano, porque viaja únicamente dentro de la red interna de Docker Compose, no expuesta al host — es el mismo patrón que usa cualquier balanceador o reverse proxy que termina TLS en un solo punto de entrada.
 
 Para producción real, `certs/dev.crt`/`certs/dev.key` se reemplazarían por un certificado emitido por una autoridad certificadora (por ejemplo, Let's Encrypt), sin cambiar la configuración de `nginx.conf` más allá de la ruta de los archivos.
+
+### Backups
+
+No hay backup automático programado — los datos viven únicamente en los volúmenes Docker (`postgres_data`, `mongo_data`, `rabbitmq_data`, `redis_data`). Si se pierde el volumen, se pierde el dato. `scripts/backup.sh` exporta las 4 bases (`auth_db`, `items_db`, `alerts_db` de PostgreSQL vía `pg_dump`; `logs_db` de MongoDB vía `mongodump`) a una carpeta con timestamp:
+
+```bash
+# Con el stack levantado, desde la raíz del repo:
+sh scripts/backup.sh
+# Genera: backups/<fecha_hora>/{auth_db,items_db,alerts_db}.sql + logs_db.archive
+```
+
+Para restaurar un backup (sobreescribe los datos actuales, sin confirmación — usar con cuidado):
+
+```bash
+sh scripts/restore.sh backups/20260709_170000
+```
+
+`backups/` no se versiona (ver `.gitignore`) porque contiene datos reales de usuarios y eventos. Conviene correr `scripts/backup.sh` antes de una demo importante o de cualquier cambio grande al esquema de datos.
 
 ### Puertos
 

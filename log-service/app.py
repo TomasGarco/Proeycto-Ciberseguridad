@@ -5,9 +5,11 @@ import sys
 import time
 from datetime import datetime
 from typing import List, Optional
-from fastapi import FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import JWTError, jwt
 from pydantic import BaseModel, Field
 from pymongo import MongoClient
 from pymongo.errors import ConnectionFailure
@@ -48,6 +50,28 @@ RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "guest")
 LOGS_EXCHANGE = "logs_events"
 
 CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "https://localhost").split(",")]
+
+# Verificación de JWT (Semana 10): este servicio no emite tokens, solo
+# verifica los que auth-service firmó con la misma JWT_SECRET_KEY y
+# algoritmo HS256 — mismo patrón que alert-service.
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "changeme-super-secret-key-for-jwt-in-production")
+JWT_ALGORITHM = "HS256"
+_bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def require_authenticated(credentials: HTTPAuthorizationCredentials = Depends(_bearer_scheme)):
+    """Protege las lecturas de logs: solo exige un JWT válido de auth-service
+    (cualquier rol) — la pestaña Logs del dashboard la ve tanto `analista`
+    como `admin`, así que no se restringe por rol, solo se exige estar
+    autenticado. POST /logs queda abierto: lo llaman los propios servicios
+    del stack para reportar eventos, no personas."""
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Token de autenticación requerido.")
+    try:
+        payload = jwt.decode(credentials.credentials, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Token inválido o expirado.")
+    return payload
 
 
 def publish_event(event: dict):
@@ -179,9 +203,14 @@ def create_log(entry: LogEntry):
     return {"status": "success", "recorded": True, "id": str(result.inserted_id)}
 
 @app.get("/logs", response_model=List[dict], tags=["Logs"])
-def get_logs(limit: int = 100, service: Optional[str] = None, level: Optional[str] = None):
+def get_logs(
+    limit: int = 100,
+    service: Optional[str] = None,
+    level: Optional[str] = None,
+    _: dict = Depends(require_authenticated),
+):
     """
-    Retorna logs de MongoDB con opciones de filtrado.
+    Retorna logs de MongoDB con opciones de filtrado. **Requiere estar autenticado.**
     """
     try:
         query = {}

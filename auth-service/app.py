@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional
 
 import requests
-from fastapi import FastAPI, HTTPException, status, Depends, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Request, status, Depends, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -89,6 +89,31 @@ def _register_login_failure(username: str) -> bool:
 def _clear_login_failures(username: str):
     _login_failures.pop(username, None)
     _login_blocked_until.pop(username, None)
+
+
+# Rate limit de registro por IP: sin esto, cualquiera puede crear cuentas
+# ilimitadas contra /auth/register. Umbral más laxo que el de login porque
+# registrarse es una acción legítima poco frecuente, no un intento repetido
+# de acceso — 10 registros en 5 minutos desde la misma IP ya es sospechoso.
+REGISTER_RATE_LIMIT_ATTEMPTS = 10
+REGISTER_RATE_LIMIT_WINDOW_SECONDS = 300
+_register_attempts: dict[str, deque] = defaultdict(deque)
+
+
+def _check_register_rate_limit(client_ip: str):
+    """Lanza 429 si la IP superó el límite de registros en la ventana."""
+    now = time.time()
+    window = _register_attempts[client_ip]
+    while window and now - window[0] > REGISTER_RATE_LIMIT_WINDOW_SECONDS:
+        window.popleft()
+    if len(window) >= REGISTER_RATE_LIMIT_ATTEMPTS:
+        retry_after = round(REGISTER_RATE_LIMIT_WINDOW_SECONDS - (now - window[0]))
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Demasiados registros desde esta red. Intenta de nuevo en {retry_after} segundos.",
+            headers={"Retry-After": str(retry_after)},
+        )
+    window.append(now)
 LOG_SERVICE_URL = os.getenv("LOG_SERVICE_URL", "http://localhost:8010")
 CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "https://localhost").split(",")]
 
@@ -628,7 +653,12 @@ async def swagger_ui_redirect():
         422: {"description": "Datos de entrada inválidos (username < 3, email malformado, password < 6 o de caracteres repetitivos)"},
     },
 )
-def register(user_data: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_auth_db)):
+def register(
+    user_data: UserCreate,
+    background_tasks: BackgroundTasks,
+    request: Request,
+    db: Session = Depends(get_auth_db),
+):
     """
     Crea una cuenta de usuario con rol **`analista`** por defecto. El rol `admin` no puede
     asignarse desde este endpoint — un administrador existente puede promover la cuenta
@@ -640,8 +670,15 @@ def register(user_data: UserCreate, background_tasks: BackgroundTasks, db: Sessi
       caracteres distintos — se rechazan contraseñas repetitivas como `11111111`
       (se almacena hasheada con bcrypt, nunca en texto plano)
 
+    Tras 10 registros en 5 minutos desde la misma IP, este endpoint queda
+    bloqueado (`429 Too Many Requests`) — protección contra creación masiva
+    de cuentas automatizada.
+
     Al registrarse correctamente, usa **`/auth/login`** para obtener tu token JWT.
     """
+    client_ip = request.headers.get("x-real-ip", request.client.host if request.client else "unknown")
+    _check_register_rate_limit(client_ip)
+
     if db.query(UserORM).filter(
         (UserORM.username == user_data.username) | (UserORM.email == user_data.email)
     ).first():

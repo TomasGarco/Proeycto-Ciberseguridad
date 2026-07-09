@@ -6,7 +6,7 @@ FastAPI · PostgreSQL (`auth_db`, `items_db`, fallback a SQLite local) · Puerto
 
 Autenticación con JWT, gestión de usuarios y roles, y un CRUD de "items" de ejemplo usado para practicar operaciones protegidas por rol. Roles soportados: `analista` (rol por defecto al registrarse) y `admin`. También reporta cada evento relevante al Log Service en segundo plano (`BackgroundTasks` + `requests`), sin bloquear la respuesta al cliente.
 
-Incluye rate limiting de login: 5 intentos fallidos en 60s bloquean al usuario 60s (`429 Too Many Requests`) — mismo umbral que la regla `fuerza-bruta-login` del Analysis Service.
+Incluye rate limiting de login: 5 intentos fallidos en 60s bloquean al usuario 60s (`429 Too Many Requests`) — mismo umbral que la regla `fuerza-bruta-login` del Analysis Service. También rate limiting de registro (Semana 10): 10 registros en 5 minutos desde la misma IP bloquean nuevos registros de esa IP (`429`) — protege contra creación masiva de cuentas automatizada.
 
 ## Endpoints principales
 

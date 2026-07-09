@@ -10,18 +10,20 @@ Un hilo dedicado consume la cola `analysis_queue` (binding `logs.#`) y le aplica
 
 ## Endpoints principales
 
-| Método | Endpoint | Descripción |
-|---|---|---|
-| `GET` | `/api/health` | Estado del servicio |
-| `GET` | `/stats` | Estadísticas agregadas (por nivel, por servicio, por severidad de alerta) |
-| `GET` | `/events/recent` | Últimos eventos consumidos (máx. 50, en memoria/Redis) |
-| `GET` | `/rules` | Lista de reglas activas |
+| Método | Endpoint | Auth requerida | Descripción |
+|---|---|---|---|
+| `GET` | `/api/health` | ninguna | Estado del servicio |
+| `GET` | `/stats` | JWT (cualquier rol) | Estadísticas agregadas (por nivel, por servicio, por severidad de alerta) |
+| `GET` | `/events/recent` | JWT (cualquier rol) | Últimos eventos consumidos (máx. 50, en memoria/Redis) |
+| `GET` | `/rules` | JWT (cualquier rol) | Lista de reglas activas |
 
 Swagger/OpenAPI (autogenerado por FastAPI): `http://localhost:8002/docs`.
 
+**Autenticación (Semana 10):** los 3 endpoints de lectura exigen un JWT válido emitido por auth-service — sin restricción de rol, porque la pestaña Estadísticas del dashboard la ve tanto `analista` como `admin`.
+
 ## Variables de entorno
 
-`RABBITMQ_HOST/PORT/USER/PASSWORD`, `REDIS_HOST/PORT` (opcional — sin `REDIS_HOST` funciona solo en memoria, sin persistir contadores entre reinicios), `CORS_ORIGINS`. Ver `.env.example` en la raíz.
+`RABBITMQ_HOST/PORT/USER/PASSWORD`, `REDIS_HOST/PORT` (opcional — sin `REDIS_HOST` funciona solo en memoria, sin persistir contadores entre reinicios), `JWT_SECRET_KEY` (debe ser la misma que usa auth-service para firmar los tokens), `CORS_ORIGINS`. Ver `.env.example` en la raíz.
 
 ## Logging
 
