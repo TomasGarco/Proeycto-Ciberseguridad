@@ -33,7 +33,7 @@ services:
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-changeme-super-secret-key-for-jwt-in-production}
-      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://localhost}
     volumes:
       - ./docs:/app/docs:ro
       - ./README.md:/app/README.md:ro
@@ -67,7 +67,7 @@ services:
       - RABBITMQ_PORT=5672
       - RABBITMQ_USER=${RABBITMQ_DEFAULT_USER:-guest}
       - RABBITMQ_PASSWORD=${RABBITMQ_DEFAULT_PASS:-guest}
-      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://localhost}
     depends_on:
       mongodb:
         condition: service_healthy
@@ -95,7 +95,7 @@ services:
       - RABBITMQ_PASSWORD=${RABBITMQ_DEFAULT_PASS:-guest}
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000}
+      - CORS_ORIGINS=${CORS_ORIGINS:-https://localhost}
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -138,10 +138,16 @@ services:
       start_period: 10s
 
   dashboard-service:
-    build: ./dashboard-service
+    # Contexto de build en la raíz (no ./dashboard-service) para que el
+    # Dockerfile pueda copiar certs/dev.crt y certs/dev.key generados con
+    # certs/generate-dev-cert.sh.
+    build:
+      context: .
+      dockerfile: dashboard-service/Dockerfile
     container_name: dashboard-service
     ports:
       - "3000:3000"
+      - "443:3443"
     restart: unless-stopped
     depends_on:
       - auth-service

@@ -47,7 +47,7 @@ RABBITMQ_USER = os.getenv("RABBITMQ_USER", "guest")
 RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "guest")
 LOGS_EXCHANGE = "logs_events"
 
-CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")]
+CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "https://localhost").split(",")]
 
 
 def publish_event(event: dict):

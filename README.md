@@ -14,7 +14,7 @@ Con el stack levantado (`docker compose up -d --build`), estos son todos los lin
 
 | Servicio | Link | Qué vas a ver |
 |---|---|---|
-| **Dashboard** — punto de entrada principal | **[http://localhost:3000](http://localhost:3000)** | Login, logs en vivo, estadísticas, alertas, CRUD de artículos, gestión de usuarios |
+| **Dashboard** — punto de entrada principal | **[https://localhost](https://localhost)** (`:3000` redirige a `:443`) | Login, logs en vivo, estadísticas, alertas, CRUD de artículos, gestión de usuarios |
 | Auth Service — API + Swagger | [http://localhost:8000/docs](http://localhost:8000/docs) | Documentación interactiva de todos los endpoints de auth/items |
 | Auth Service — consola legacy | [http://localhost:8000](http://localhost:8000) | Dashboard HTML embebido (versión anterior al de React) |
 | Log Service — consola web | [http://localhost:8010](http://localhost:8010) | Monitor de logs en vivo con auto-refresco |
@@ -23,6 +23,8 @@ Con el stack levantado (`docker compose up -d --build`), estos son todos los lin
 | RabbitMQ — panel de administración | [http://localhost:15672](http://localhost:15672) | Colas, mensajes y exchanges — usuario/clave en `.env` (por defecto `guest`/`guest`) |
 
 Postgres, MongoDB y Redis **no tienen link** — no están expuestos al navegador a propósito (solo los usan los servicios entre sí). Para inspeccionarlos hay que usar `docker exec` (comandos en la sección [Puertos](#puertos) más abajo).
+
+**Sobre el candado de `https://localhost`:** el certificado es autofirmado (generado con `certs/generate-dev-cert.sh`, ver sección [HTTPS](#https)), así que el navegador va a mostrar una advertencia de seguridad la primera vez — es esperado en desarrollo, hay que aceptar la excepción una sola vez.
 
 ---
 
@@ -113,6 +115,9 @@ python-docker-service/
 ├── postgres-init/          Scripts SQL ejecutados al primer arranque de Postgres
 │   └── 01-create-databases.sql   Crea auth_db, items_db y alerts_db
 │
+├── certs/                  Certificado TLS de desarrollo (no versionado)
+│   └── generate-dev-cert.sh      Genera certs/dev.crt y certs/dev.key
+│
 ├── docker-compose.yml      Orquestación de contenedores, red y volúmenes
 ├── .env.example            Plantilla de variables de entorno/credenciales (copiar a .env)
 ├── run_local.bat           Script para iniciar los servicios Python localmente (usa SQLite)
@@ -133,6 +138,11 @@ Requiere tener Docker Desktop iniciado.
 # 0. Copiar .env.example a .env (una sola vez) y ajustar credenciales si hace falta
 cp .env.example .env
 
+# 0.5. Generar el certificado TLS de desarrollo (una sola vez; certs/ no se
+#      versiona, ver sección HTTPS más abajo)
+docker run --rm -v "$(pwd)/certs:/certs" alpine sh -c \
+  "apk add --no-cache openssl >/dev/null 2>&1 && sh /certs/generate-dev-cert.sh"
+
 # 1. Levantar la arquitectura completa en segundo plano
 #    (postgres arranca primero y espera su healthcheck antes de que
 #    auth-service inicie — ver docker-compose.yml)
@@ -145,13 +155,22 @@ docker compose logs -f
 docker compose down
 ```
 
+### HTTPS
+
+El Dashboard Service sirve por HTTPS en el puerto `443` (`https://localhost`); el puerto `3000` sigue existiendo solo para redirigir automáticamente a `443` (`301 Moved Permanently`). El certificado es **autofirmado**, generado con `certs/generate-dev-cert.sh` — el navegador va a mostrar una advertencia de seguridad ("la conexión no es privada" o similar) la primera vez, porque no está firmado por una autoridad certificadora reconocida. Hay que aceptar la excepción una vez; es el comportamiento esperado en un entorno de desarrollo local, no un error.
+
+El tramo nginx → microservicios backend (Auth, Log, Analysis, Alert) sigue en HTTP plano, porque viaja únicamente dentro de la red interna de Docker Compose, no expuesta al host — es el mismo patrón que usa cualquier balanceador o reverse proxy que termina TLS en un solo punto de entrada.
+
+Para producción real, `certs/dev.crt`/`certs/dev.key` se reemplazarían por un certificado emitido por una autoridad certificadora (por ejemplo, Let's Encrypt), sin cambiar la configuración de `nginx.conf` más allá de la ruta de los archivos.
+
 ### Puertos
 
 Tabla rápida primero, ficha detallada de cada uno después — para saber no solo *qué puerto es*, sino *qué se implementa ahí* y *cómo encaja en el funcionamiento completo del proyecto*.
 
 | Puerto | Servicio | Protocolo | Expuesto al host |
 |---|---|---|---|
-| 3000 | dashboard-service | HTTP | Sí |
+| 443 | dashboard-service | HTTPS | Sí — punto de entrada principal |
+| 3000 | dashboard-service | HTTP | Sí, solo redirige a `443` |
 | 8000 | auth-service | HTTP | Sí |
 | 8010 | log-service | HTTP | Sí |
 | 8002 | analysis-service | HTTP | Sí |
@@ -174,11 +193,13 @@ El puerto `5672` (AMQP) no tiene un comando de inspección equivalente — no es
 
 ---
 
-#### `:3000` — Dashboard Service (React)
+#### `:443` / `:3000` — Dashboard Service (React)
 
-**Qué es:** el frontend del proyecto — lo primero que ve cualquier usuario. Es una SPA en React (Vite + Recharts + Axios) compilada a estático y servida por nginx.
+**Qué es:** el frontend del proyecto — lo primero que ve cualquier usuario. Es una SPA en React (Vite + Recharts + Axios) compilada a estático y servida por nginx, sobre HTTPS.
 
 **Qué se implementa aquí:** login/registro con validación en vivo (mostrar/ocultar contraseña, errores por campo), tabla de logs en tiempo real con filtros, gráficos de estadísticas, un CRUD de artículos con formulario de alta y edición inline, gestión de usuarios (cambio de rol, solo `admin`), y una vista de Alertas en vivo con búsqueda de texto libre, columnas ordenables, fila expandible con el evento que disparó cada alerta, gráfico de barras por severidad y botones de ciclo de vida (Reconocer / Cerrar) visibles solo para `admin`. nginx además hace de **reverse proxy**: todas las llamadas del navegador van a `/api/*` en este mismo origen, y nginx las reenvía internamente a auth-service, log-service, analysis-service y alert-service — así el navegador nunca le habla directo a los otros puertos y no hay problemas de CORS entre pestañas.
+
+**TLS (Semana 10):** `:443` sirve la SPA y el reverse proxy sobre HTTPS con un certificado autofirmado de desarrollo; `:3000` solo responde con un `301` hacia `:443` (y el endpoint `/health` en HTTP puro, para el healthcheck del propio contenedor). El tramo nginx → microservicios backend sigue en HTTP plano, porque no sale de la red interna de Docker Compose. Ver sección [HTTPS](#https) más arriba.
 
 **Por qué existe / cómo aporta:** sin esto, el proyecto sería solo APIs sueltas sin forma de demostrarlas. Es la pieza que convierte 5 microservicios backend en "un producto" que se puede mostrar y usar.
 

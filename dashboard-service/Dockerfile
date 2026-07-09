@@ -4,21 +4,25 @@ FROM node:20-alpine AS build
 WORKDIR /app
 
 # Copiar primero los manifests para aprovechar la caché de Docker
-COPY package.json package-lock.json ./
+COPY dashboard-service/package.json dashboard-service/package-lock.json ./
 RUN npm ci
 
 # Copiar el código fuente y compilar
-COPY vite.config.js index.html ./
-COPY src ./src
+COPY dashboard-service/vite.config.js dashboard-service/index.html ./
+COPY dashboard-service/src ./src
 RUN npm run build
 
 # Etapa 2: servir los estáticos y hacer de reverse proxy con nginx
 FROM nginx:alpine
 
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY dashboard-service/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
+# Certificado autofirmado de desarrollo (ver certs/generate-dev-cert.sh en la
+# raíz del repo) — no versionado, cada quien lo genera una vez antes del build.
+COPY certs/dev.crt /etc/nginx/certs/dev.crt
+COPY certs/dev.key /etc/nginx/certs/dev.key
 
-EXPOSE 3000
+EXPOSE 3000 3443
 
 # Verificación de salud del contenedor vía el endpoint /health de nginx
 # (127.0.0.1 explícito: "localhost" resuelve primero a ::1 en este entorno y

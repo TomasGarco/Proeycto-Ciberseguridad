@@ -36,7 +36,7 @@ RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "guest")
 # fallback que POSTGRES_HOST en auth-service y RABBITMQ_HOST en log-service.
 REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")]
+CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "https://localhost").split(",")]
 
 LOGS_EXCHANGE = "logs_events"
 ANALYSIS_QUEUE = "analysis_queue"

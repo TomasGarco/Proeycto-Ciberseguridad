@@ -90,7 +90,7 @@ def _clear_login_failures(username: str):
     _login_failures.pop(username, None)
     _login_blocked_until.pop(username, None)
 LOG_SERVICE_URL = os.getenv("LOG_SERVICE_URL", "http://localhost:8010")
-CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")]
+CORS_ORIGINS = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "https://localhost").split(",")]
 
 
 def send_log(level: str, message: str):
@@ -1673,7 +1673,7 @@ def read_root():
                         <summary><span class="env-name">CORS_ORIGINS</span><span class="env-tag env-config">Configuración</span></summary>
                         <div class="env-body">
                             <p>Orígenes (dominios) autorizados a llamar la API desde el navegador. Antes los 3 servicios Python aceptaban cualquier origen (<code>*</code>); ahora solo el dashboard real.</p>
-                            <div class="env-meta"><span>Valor dev:</span><code>http://localhost:3000</code></div>
+                            <div class="env-meta"><span>Valor dev:</span><code>https://localhost</code></div>
                             <div class="env-meta"><span>Se usa en:</span><code>auth-service</code>, <code>log-service</code>, <code>analysis-service</code></div>
                         </div>
                     </details>
