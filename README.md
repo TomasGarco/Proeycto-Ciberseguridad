@@ -316,35 +316,65 @@ Explicación detallada de cada comando y script (`docker compose build`, `run_lo
 
 ## Endpoints de Microservicios
 
+Cada servicio expone sus acciones como *endpoints* HTTP. El **verbo** (método) dice qué tipo de acción es, sin necesidad de leer código:
+
+| Verbo | Significa | Ejemplo en este proyecto |
+|---|---|---|
+| `GET` | "Mostrame algo" — consulta, no cambia nada | Listar alertas, ver estadísticas |
+| `POST` | "Creá algo nuevo" | Registrar un usuario, crear un artículo |
+| `PUT` | "Reemplazá esto entero" | Editar todos los campos de un artículo |
+| `PATCH` | "Cambiá una parte puntual" | Cambiar el rol de un usuario, cambiar el estado de una alerta |
+| `DELETE` | "Borrá esto" | Eliminar un artículo |
+
+Todos los endpoints que requieren estar logueado esperan el header `Authorization: Bearer <token>` (el token que entrega `/auth/login`) — el interceptor de axios del dashboard (`dashboard-service/src/api.js`) lo agrega automáticamente a cada llamada.
+
 ### Auth Service (`http://localhost:8000`)
 
-| Método | Endpoint | Tags | Descripción |
+| Método | Endpoint | Requiere | Descripción |
 |--------|----------|------|-------------|
-| `POST` | `/auth/register` | Auth | Registrar un nuevo usuario (rol `analista` por defecto) |
-| `POST` | `/auth/login` | Auth | Obtener token JWT Bearer |
-| `GET` | `/auth/me` | Auth | Perfil del usuario activo decodificado desde JWT |
-| `GET` | `/auth/users` | Auth | Listar usuarios (solo `admin`) |
-| `GET` | `/api/items` | Items | Listar todos los productos del inventario |
-| `POST` | `/api/items` | Items | Crear un producto asociado al usuario |
-| `PUT` | `/api/items/{id}` | Items | Modificar un producto (solo `admin`) |
-| `DELETE`| `/api/items/{id}` | Items | Eliminar producto del sistema (solo `admin`) |
-| `GET` | `/api/health` | System| Estado del Auth Service |
+| `POST` | `/auth/register` | público | Registrar un nuevo usuario (rol `analista` por defecto). Rate limit: 10 registros/5min por IP |
+| `POST` | `/auth/login` | público | Obtener token JWT Bearer. Rate limit: 5 fallos/60s bloquean 60s |
+| `GET` | `/auth/me` | logueado | Perfil del usuario activo decodificado desde el token |
+| `POST` | `/auth/change-password` | logueado | Cambiar la contraseña propia (pide la actual) |
+| `GET` | `/auth/users` | `admin` | Listar todos los usuarios registrados |
+| `PATCH` | `/auth/users/{id}/role` | `admin` | Cambiar el rol de otro usuario (no el propio) |
+| `GET` | `/api/items` | logueado | Listar todos los artículos del inventario |
+| `GET` | `/api/items/{id}` | logueado | Ver un artículo puntual |
+| `POST` | `/api/items` | logueado | Crear un artículo nuevo |
+| `PUT` | `/api/items/{id}` | `admin` | Reemplazar los datos de un artículo existente |
+| `DELETE`| `/api/items/{id}` | `admin` | Eliminar un artículo |
+| `GET` | `/api/health` | público | Estado del servicio (lo usa el healthcheck de Docker) |
 
 ### Log Service (`http://localhost:8010`)
 
-| Método | Endpoint | Tags | Descripción |
+| Método | Endpoint | Requiere | Descripción |
 |--------|----------|------|-------------|
-| `GET` | `/` | Web | Consola de monitoreo con auto-refresco |
-| `POST` | `/logs` | Logs | Registrar un evento: lo persiste en MongoDB y lo publica a RabbitMQ |
-| `GET` | `/logs` | Logs | Consultar / filtrar logs almacenados en MongoDB |
+| `GET` | `/` | público | Consola de monitoreo con auto-refresco |
+| `POST` | `/logs` | público (lo llaman los propios servicios, no personas) | Registrar un evento: lo persiste en MongoDB y lo publica a RabbitMQ |
+| `GET` | `/logs` | logueado (cualquier rol) | Consultar / filtrar logs almacenados en MongoDB |
+| `GET` | `/api/health` | público | Estado del servicio |
 
 ### Analysis Service (`http://localhost:8002`)
 
-| Método | Endpoint | Tags | Descripción |
+| Método | Endpoint | Requiere | Descripción |
 |--------|----------|------|-------------|
-| `GET` | `/health` | System | Estado del Analysis Service |
-| `GET` | `/stats` | Análisis | Estadísticas agregadas de eventos consumidos (por nivel, por servicio) |
-| `GET` | `/events/recent` | Análisis | Últimos eventos consumidos desde RabbitMQ (máx. 50 en memoria) |
+| `GET` | `/stats` | logueado (cualquier rol) | Estadísticas agregadas de eventos consumidos (por nivel, por servicio) |
+| `GET` | `/events/recent` | logueado (cualquier rol) | Últimos eventos consumidos desde RabbitMQ (máx. 50 en memoria) |
+| `GET` | `/rules` | logueado (cualquier rol) | Lista de reglas de detección configuradas |
+| `GET` | `/api/health` | público | Estado del servicio |
+
+Este servicio no tiene ningún `POST` de negocio: los eventos que analiza los toma directo de la cola de RabbitMQ, no por HTTP.
+
+### Alert Service (`http://localhost:8003`)
+
+| Método | Endpoint | Requiere | Descripción |
+|--------|----------|------|-------------|
+| `GET` | `/alerts` | logueado (cualquier rol) | Listar alertas, con filtros por severidad/estado |
+| `GET` | `/alerts/stats` | logueado (cualquier rol) | Conteos agregados de alertas |
+| `PATCH` | `/alerts/{id}` | `admin` | Cambiar el estado: nueva → reconocida → cerrada |
+| `GET` | `/api/health` | público | Estado del servicio |
+
+Tampoco tiene `POST`: las alertas las genera Analysis Service y llegan por RabbitMQ, nunca las crea una persona a mano.
 
 ### Dashboard Service (`http://localhost:3000`) — dashboard principal
 
