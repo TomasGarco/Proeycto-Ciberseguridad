@@ -10,24 +10,45 @@ Esta guía muestra visualmente cómo funciona el sistema.
 python-docker-service/
 │
 ├── auth-service/
-│   ├── app.py                 ← ~1800 líneas: API + Dashboard
+│   ├── app.py                 ← API de auth/items + dashboard embebido (legacy)
 │   ├── requirements.txt        ← Dependencias
 │   └── Dockerfile             ← Imagen Docker (Python 3.12-slim)
 │
 ├── log-service/
-│   ├── app.py                 ← ~300 líneas: Logger + Console
+│   ├── app.py                 ← Recolector de logs: MongoDB + publica a RabbitMQ
 │   ├── requirements.txt        ← Dependencias
 │   └── Dockerfile             ← Imagen Docker
 │
+├── analysis-service/
+│   ├── app.py                 ← Consumidor RabbitMQ + motor de reglas + stats en Redis
+│   ├── requirements.txt        ← Dependencias
+│   └── Dockerfile             ← Imagen Docker
+│
+├── alert-service/
+│   ├── index.js               ← Node/Express: consume alertas y persiste en Postgres
+│   ├── package.json           ← Dependencias
+│   └── Dockerfile             ← Imagen Docker
+│
+├── dashboard-service/
+│   ├── src/                   ← Frontend React (Vite + Recharts + Axios)
+│   ├── nginx.conf             ← SPA + reverse proxy + TLS + rate limiting
+│   └── Dockerfile             ← Build de React + nginx
+│
 ├── postgres-init/
-│   └── 01-create-databases.sql ← Crea auth_db e items_db al primer arranque
+│   └── 01-create-databases.sql ← Crea auth_db, items_db y alerts_db al primer arranque
+│
+├── certs/                     ← Certificado TLS de desarrollo (no versionado)
+│   ├── generate-dev-cert.sh          ← Autofirmado con openssl (con advertencia en el navegador)
+│   └── generate-dev-cert-mkcert.sh   ← Alternativa con mkcert (confiado por el sistema, sin advertencia)
+│
+├── scripts/
+│   ├── backup.sh              ← Backup manual de las 4 bases
+│   ├── restore.sh             ← Restaura un backup
+│   └── gen_docs.py            ← Regenera docs/AUTH_SERVICE_ARCHITECTURE.md desde el código
 │
 ├── data/
 │   ├── auth.db                ← SQLite (solo fallback sin Docker)
 │   └── items.db               ← SQLite (solo fallback sin Docker)
-│
-├── logs/
-│   └── service.log            ← Archivo de logs persistente
 │
 ├── docs/
 │   ├── PROJECT_SUMMARY.md               ← Punto de entrada
@@ -362,7 +383,8 @@ Capa 5: Base de Datos
 
 ENDURECIDO EN SEMANA 10 (ya no son recomendaciones pendientes):
    ├─ JWT_SECRET_KEY es una variable de entorno con secreto real generado (no hardcodeado)
-   ├─ HTTPS habilitado en el punto de entrada del navegador (certificado autofirmado de desarrollo)
+   ├─ HTTPS habilitado en el punto de entrada del navegador (certificado de desarrollo:
+   │  autofirmado con openssl, o confiado por el sistema con mkcert — sin advertencia)
    ├─ Rate limiting: login (5 fallos/60s), registro (10/5min por IP), y general en nginx (1 req/s por IP)
    ├─ Logging estructurado en JSON en los 5 servicios; Log Service persiste en MongoDB (no en memoria) desde la Semana 4
    └─ Backups: manual (scripts/backup.sh) + automático (Tarea Programada de Windows, diario 3 AM)
@@ -403,25 +425,25 @@ Auth Service (8000)              Log Service (8010)
       │  (Más eventos: create, update,   │
       │   delete items, etc.)            │
       │                                  │
-      │  Log Service almacena todos      │
-      │  en memoria + archivo log        │
+      │  Log Service persiste todos      │
+      │  en MongoDB (logs_db.logs) y     │
+      │  los publica a RabbitMQ          │
 
-Log Service internamente:
+Log Service internamente (desde Semana 4):
 ┌─────────────────────────────────────┐
-│ GET /logs                           │
+│ POST /logs                          │
 ├─────────────────────────────────────┤
-│ in_memory_logs = [               │
-│   {"service": "auth-service",    │
-│    "level": "INFO",              │
-│    "message": "..."},            │
-│   ...                            │
-│ ]                                │
-│                                 │
-│ Filtra por:                      │
-│ - level (INFO, WARNING, ERROR)   │
-│ - service (auth-service)         │
-│ - limit (últimos 100)            │
-│ - timestamp                      │
+│ 1. INSERT en MongoDB                │
+│    (logs_db.logs)                   │
+│ 2. Publica a RabbitMQ               │
+│    (exchange logs_events,           │
+│     routing key logs.<nivel>)       │
+│                                     │
+│ GET /logs filtra por:               │
+│ - level (INFO, WARNING, ERROR)      │
+│ - service (auth-service)            │
+│ - limit (últimos 100)               │
+│ - timestamp                         │
 └─────────────────────────────────────┘
 ```
 
@@ -492,24 +514,35 @@ Log Service internamente:
 │           STACK COMPLETO DEL SISTEMA            │
 ├────────────────────────────────────────────────┤
 
-Backend API:
+Backend (Python — Auth, Log y Analysis Service):
   ├─ Python 3.12
   ├─ FastAPI (framework web)
   ├─ Uvicorn (servidor ASGI)
-  ├─ SQLAlchemy (ORM)
+  ├─ SQLAlchemy (ORM, Auth Service)
   ├─ PostgreSQL (BD principal, Docker) / SQLite (fallback local)
-  ├─ psycopg2-binary (driver Postgres)
+  ├─ PyMongo (Log Service → MongoDB)
+  ├─ Pika (Log y Analysis Service → RabbitMQ)
+  ├─ redis-py (Analysis Service → caché de estadísticas)
   ├─ python-jose (tokens JWT)
   ├─ Passlib + bcrypt (hashing)
   └─ Requests (HTTP client)
 
-Frontend:
-  ├─ HTML5 embebido en Python (sin build step)
-  ├─ CSS3 (variables, grid, flexbox)
-  ├─ JavaScript vanilla
-  ├─ Fetch API
-  ├─ Lucide Icons (SVG inline, sin CDN)
+Backend (Node.js — Alert Service):
+  ├─ Node.js 20 + Express
+  ├─ pg (driver PostgreSQL → alerts_db)
+  └─ amqplib (consumidor RabbitMQ)
+
+Frontend (dashboard principal — dashboard-service):
+  ├─ React 18 + Vite
+  ├─ Recharts (gráficos)
+  ├─ Axios (HTTP client)
+  ├─ nginx (estáticos + reverse proxy + TLS + rate limiting)
   └─ localStorage (JWT storage)
+
+Frontend (consola legacy — auth-service :8000):
+  ├─ HTML5 embebido en Python (sin build step)
+  ├─ CSS3 + JavaScript vanilla + Fetch API
+  └─ Lucide Icons (SVG inline, sin CDN)
 
 Documentación:
   ├─ FastAPI OpenAPI/Swagger (tema personalizado en /docs)
@@ -518,9 +551,11 @@ Documentación:
 
 DevOps:
   ├─ Docker (containerización)
-  ├─ Docker Compose (orquestación de 3 servicios: postgres, auth-service, log-service)
-  ├─ Healthcheck de Postgres antes de arrancar Auth Service
-  └─ Volúmenes persistentes (postgres_data, log_data)
+  ├─ Docker Compose (9 contenedores: 5 servicios de aplicación +
+  │  postgres, mongodb, rabbitmq y redis)
+  ├─ Healthchecks (Postgres/RabbitMQ antes de los servicios que dependen de ellos)
+  ├─ Volúmenes persistentes (postgres_data, mongo_data, rabbitmq_data, redis_data)
+  └─ Backups: scripts/backup.sh + Tarea Programada de Windows (diario 3 AM)
 
 Herramientas:
   ├─ Git (versionado)
@@ -573,7 +608,10 @@ Rate limiting (Semana 10 — ya implementado)
    └─ General: 1 req/s por IP en nginx (todo /api/*)
 
 HTTPS (Semana 10 — ya implementado)
-   ├─ nginx (dashboard-service) sirve el navegador por :443 con certificado autofirmado
+   ├─ nginx (dashboard-service) sirve el navegador por :443 con certificado de desarrollo
+   ├─ Dos formas de generarlo: certs/generate-dev-cert.sh (autofirmado con openssl,
+   │  el navegador muestra advertencia una vez) o certs/generate-dev-cert-mkcert.sh
+   │  (firmado por una CA local de mkcert confiada por el sistema — sin advertencia)
    ├─ El tramo nginx → microservicios sigue en HTTP, dentro de la red interna de Docker
    └─ Para producción real: reemplazar el certificado por uno de una autoridad certificadora
 ```

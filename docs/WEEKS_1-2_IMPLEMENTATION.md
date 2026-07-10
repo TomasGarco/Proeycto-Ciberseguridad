@@ -25,14 +25,16 @@ This guide documents what has been implemented in **Week 1 (Docker Fundamentals)
 Requires Docker Desktop running.
 
 ```bash
-# 1. Build and start postgres, auth-service and log-service in background
+# 1. Build and start the full stack in background (9 containers: 5 app services
+#    + postgres, mongodb, rabbitmq, redis — see README.md for the full picture)
 docker compose up -d --build
 
 # 2. Access in browser:
-#    http://localhost:8000        Auth Service Dashboard
+#    https://localhost            React Dashboard (main entry point since Week 7)
+#    http://localhost:8000        Auth Service Dashboard (legacy console)
 #    http://localhost:8000/docs   Swagger UI (API Documentation)
 #    http://localhost:8010        Log Service Console
-#    localhost:5432               PostgreSQL (auth_db, items_db)
+#    (Postgres, MongoDB and Redis are internal-only — no browser access)
 
 # 3. View logs:
 docker compose logs -f
@@ -40,6 +42,11 @@ docker compose logs -f
 # 4. Stop services:
 docker compose down
 ```
+
+> **Note:** this guide documents Weeks 1–2 in depth (Auth Service + Log Service +
+> PostgreSQL). The services added in later weeks (Analysis Service, Alert Service,
+> React Dashboard, MongoDB, RabbitMQ, Redis, HTTPS) are covered in the root
+> `README.md` and `docs/PROJECT_SUMMARY.md`.
 
 **First test:**
 - Login with credentials: `admin` / `admin123`
@@ -66,7 +73,11 @@ Requires Python 3.10+ and local `venv` already created. Without `POSTGRES_HOST` 
 
 ## Architecture Overview
 
-### System Diagram
+### System Diagram (Weeks 1–2 scope)
+
+This diagram shows the original three containers this guide covers. The current
+full architecture (5 app services + 4 backing services) is diagrammed in the
+root `README.md`.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -80,11 +91,12 @@ Requires Python 3.10+ and local `venv` already created. Without `POSTGRES_HOST` 
 │  Auth Service (8000) │    │ Log Service (8010)  │
 │  ──────────────────  │    │ ───────────────────  │
 │ - Register/Login     │    │ - Receive logs      │
-│ - JWT Token Mgmt     │    │ - Store in memory   │
-│ - CRUD Items         │───→│ - HTML console      │
-│ - Dashboard (HTML)   │HTTP│ - REST GET /logs    │
-└──────────┬───────────┘(BackgroundTasks)
-           │
+│ - JWT Token Mgmt     │    │ - Persist (MongoDB  │
+│ - CRUD Items         │───→│   since Week 4)     │
+│ - Dashboard (HTML)   │HTTP│ - HTML console      │
+└──────────┬───────────┘(BackgroundTasks)         │
+           │                │ - REST GET /logs    │
+           │                └─────────────────────┘
            ▼
     ┌──────────────────┐
     │  PostgreSQL       │
@@ -109,18 +121,18 @@ Requires Python 3.10+ and local `venv` already created. Without `POSTGRES_HOST` 
 **Log Service** (port 8010)
 - FastAPI log aggregator
 - Receives log events from Auth Service
-- Stores logs in memory (max 500 entries) and appends to `logs/service.log`
+- Persists every log in MongoDB (`logs_db.logs`) and publishes it to RabbitMQ (since Week 4 — originally it stored logs in memory)
 - Serves HTML console for real-time log viewing
 - Provides REST endpoint to query logs
 
-**PostgreSQL** (port 5432)
-- Single Postgres 16 server hosting two isolated databases
+**PostgreSQL** (port 5432, internal-only)
+- Single Postgres 16 server hosting three isolated databases (`auth_db`, `items_db`, and `alerts_db` since Week 8)
 - Databases are created once via `postgres-init/01-create-databases.sql` on first container startup
 - Has a `pg_isready` healthcheck; `auth-service` won't start until it passes
 
 ### Networking
 
-All three containers run inside Docker Compose's default bridge network. The Auth Service connects to the Log Service via `LOG_SERVICE_URL=http://log-service:8010`, and to Postgres via `POSTGRES_HOST=postgres`.
+All containers run inside Docker Compose's default bridge network. The Auth Service connects to the Log Service via `LOG_SERVICE_URL=http://log-service:8010`, and to Postgres via `POSTGRES_HOST=postgres`.
 
 ### Databases
 
@@ -264,7 +276,7 @@ Authorization: Bearer <token>
 {"status": "success", "message": "Contraseña actualizada correctamente."}
 ```
 
-**Error responses:** 400 if `current_password` doesn't match, 422 if `new_password` is under 6 characters.
+**Error responses:** 400 if `current_password` doesn't match, 422 if `new_password` doesn't meet the password policy (minimum 8 characters, with uppercase, lowercase, a number and at least 3 distinct characters).
 
 ---
 
@@ -573,15 +585,16 @@ Users (1) ───────→ (Many) Items
 
 ### Role-Based Access Control (RBAC)
 
-**Role Matrix** (yes/no = whether the role can call that endpoint):
+**Role Matrix** (yes/no = whether the role can call that endpoint). The two roles are `admin` and `analista` (new accounts are created as `analista`):
 
-| Endpoint | Admin | User | Action |
-|----------|-------|------|--------|
+| Endpoint | admin | analista | Action |
+|----------|-------|----------|--------|
 | POST /auth/register | yes | yes | Register new account (no auth required) |
 | POST /auth/login | yes | yes | Get JWT token (no auth required) |
 | GET /auth/me | yes | yes | View own profile |
 | POST /auth/change-password | yes | yes | Change own password |
 | GET /auth/users | yes | no | List all users (admin only) |
+| PATCH /auth/users/{id}/role | yes | no | Change a user's role (admin only) |
 | GET /api/items | yes | yes | List items |
 | POST /api/items | yes | yes | Create item (owner = current user) |
 | PUT /api/items/{id} | yes | no | Update item (admin only) |
@@ -695,18 +708,19 @@ Every script and non-obvious command used in this project, and what it actually 
 | `docker compose build auth-service` | Rebuilds only the Auth Service image from `auth-service/Dockerfile`. Required after **any** edit to `auth-service/app.py` — code is `COPY`'d at build time, not mounted live. |
 | `docker compose up -d auth-service` | Recreates the `auth-service` container from the (possibly just-rebuilt) image, without touching the other two services. |
 | `docker compose logs -f` | Streams logs from all containers, live. Add a service name (`docker compose logs -f auth-service`) to filter to one. |
-| `docker compose down` | Stops and removes all containers and the network. Named volumes (`postgres_data`, `log_data`) survive this — data is not lost. |
+| `docker compose down` | Stops and removes all containers and the network. Named volumes (`postgres_data`, `mongo_data`, `rabbitmq_data`, `redis_data`) survive this — data is not lost. |
 | `docker compose down -v` | Same as above, but also deletes the volumes — this **wipes the databases and log file**. Use only when you intentionally want a clean slate. |
 | `docker volume rm python-docker-service_postgres_data` | Deletes only the Postgres volume (containers must be stopped first). Forces the `postgres-init` scripts to re-run and the seed data to be recreated on next `up`. |
-| `docker exec postgres psql -U postgres -l` | Lists all databases inside the running Postgres container — use to confirm `auth_db` and `items_db` exist. |
+| `docker exec postgres psql -U postgres -l` | Lists all databases inside the running Postgres container — use to confirm `auth_db`, `items_db` and `alerts_db` exist. |
 | `docker exec postgres psql -U postgres -d auth_db -c "SELECT * FROM users;"` | Runs a raw SQL query directly against `auth_db` without going through the API — useful for debugging. |
 | `run_local.bat` | Windows batch script. Opens two separate command-prompt windows, each running `uvicorn --reload` for one service, using the `venv` at the repo root. No Postgres involved — services fall back to local SQLite automatically since `POSTGRES_HOST` is never set in this path. |
 | `python test_crud.py` | Standalone smoke test (not pytest). Runs a sequential CRUD cycle (list, create, fetch by id, update, delete, list again) against `/api/items` on `http://127.0.0.1:8000`. The server must already be running. It does **not** cover auth/login — only the items CRUD. |
-| `postgres-init/01-create-databases.sql` | Not run manually — the official Postgres image executes every `.sql`/`.sh` file in `/docker-entrypoint-initdb.d/` automatically, but **only on the container's first startup** (i.e. only when the `postgres_data` volume is empty). Creates `auth_db` and `items_db`. |
+| `postgres-init/01-create-databases.sql` | Not run manually — the official Postgres image executes every `.sql`/`.sh` file in `/docker-entrypoint-initdb.d/` automatically, but **only on the container's first startup** (i.e. only when the `postgres_data` volume is empty). Creates `auth_db`, `items_db` and `alerts_db`. |
 | `scripts/backup.sh` (Week 10) | Exports all 4 databases (`auth_db`, `items_db`, `alerts_db` via `pg_dump`; `logs_db` via `mongodump`) into `backups/<timestamp>/`. Run manually from the repo root with the stack up: `sh scripts/backup.sh`. |
 | `scripts/restore.sh` (Week 10) | Restores a backup created by `backup.sh` — **overwrites current data without confirmation**. Usage: `sh scripts/restore.sh backups/20260709_170000`. |
 | `scripts/backup-scheduled.bat` (Week 10) | Wrapper invoked by the Windows Scheduled Task "SOC-SIEM Backup Diario" (daily, 3:00 AM) — calls `scripts/backup.sh` via Git Bash and logs to `scripts/backup.log`. Requires an active Windows session at that time. |
-| `certs/generate-dev-cert.sh` (Week 10) | Generates the self-signed TLS certificate (`certs/dev.crt`/`certs/dev.key`) that nginx uses to serve the dashboard over HTTPS. Run once before the first build: `docker run --rm -v "$(pwd)/certs:/certs" alpine sh -c "apk add --no-cache openssl >/dev/null 2>&1 && sh /certs/generate-dev-cert.sh"`. |
+| `certs/generate-dev-cert.sh` (Week 10) | Generates the self-signed TLS certificate (`certs/dev.crt`/`certs/dev.key`) that nginx uses to serve the dashboard over HTTPS. Run once before the first build: `docker run --rm -v "$(pwd)/certs:/certs" alpine sh -c "apk add --no-cache openssl >/dev/null 2>&1 && sh /certs/generate-dev-cert.sh"`. The browser shows a security warning once (self-signed) — accept the exception. |
+| `certs/generate-dev-cert-mkcert.sh` | Alternative to the above: generates the same `dev.crt`/`dev.key` but signed by a local [mkcert](https://github.com/FiloSottile/mkcert) CA that the OS/browser trusts — no security warning at all. Requires mkcert installed and `mkcert -install` run once (asks for admin/UAC). Then: `sh certs/generate-dev-cert-mkcert.sh` and rebuild the dashboard. |
 
 ---
 
