@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { createItem, deleteItem, fetchItems, updateItem } from "../api";
 import { useToast } from "../toast";
 
@@ -9,6 +9,20 @@ function formatPrice(price) {
   return price.toLocaleString("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 });
 }
 
+// Mensajes de error específicos según la respuesta del Auth Service, en vez
+// de un genérico "no se pudo". El detail del backend tiene prioridad cuando
+// existe; los códigos comunes tienen traducción propia.
+function apiErrorMessage(err, fallback) {
+  const status = err.response?.status;
+  const detail = err.response?.data?.detail;
+  if (status === 401) return "Tu sesión expiró o fue revocada — cierra sesión y vuelve a entrar.";
+  if (status === 403) return "Acción denegada: solo los administradores pueden editar o eliminar artículos.";
+  if (status === 404) return "El artículo ya no existe en el inventario (puede que otro administrador lo haya eliminado).";
+  if (status === 429) return "Demasiadas peticiones seguidas — espera unos segundos e intenta de nuevo.";
+  if (typeof detail === "string") return detail;
+  return fallback;
+}
+
 export default function ItemsPage({ user }) {
   const [items, setItems] = useState([]);
   const [error, setError] = useState("");
@@ -17,6 +31,9 @@ export default function ItemsPage({ user }) {
   const [busy, setBusy] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [editForm, setEditForm] = useState(EMPTY_FORM);
+  const [expandedId, setExpandedId] = useState(null);
+  const [confirmItem, setConfirmItem] = useState(null);
+  const [deleting, setDeleting] = useState(false);
   const toast = useToast();
   const isAdmin = user.role === "admin";
 
@@ -34,24 +51,32 @@ export default function ItemsPage({ user }) {
     load();
   }, []);
 
+  // Cerrar el modal de confirmación con Escape
+  useEffect(() => {
+    if (!confirmItem) return;
+    function onKey(e) {
+      if (e.key === "Escape") setConfirmItem(null);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [confirmItem]);
+
   async function handleCreate(e) {
     e.preventDefault();
     setBusy(true);
     try {
-      await createItem({
+      const created = await createItem({
         name: form.name.trim(),
         description: form.description.trim() || null,
         price: parseFloat(form.price),
         is_offer: form.is_offer,
       });
-      toast(`Artículo '${form.name.trim()}' creado.`, "success");
+      toast(`Artículo '${created.name}' creado con ID ${created.id} — ${formatPrice(created.price)}.`, "success");
       setForm(EMPTY_FORM);
       setShowForm(false);
       await load();
     } catch (err) {
-      const detail = err.response?.data?.detail;
-      const msg = typeof detail === "string" ? detail : "No se pudo crear el artículo.";
-      toast(msg, "error");
+      toast(apiErrorMessage(err, "No se pudo crear el artículo."), "error");
     } finally {
       setBusy(false);
     }
@@ -59,6 +84,7 @@ export default function ItemsPage({ user }) {
 
   function startEdit(item) {
     setEditingId(item.id);
+    setExpandedId(null);
     setEditForm({
       name: item.name,
       description: item.description || "",
@@ -67,32 +93,47 @@ export default function ItemsPage({ user }) {
     });
   }
 
-  async function saveEdit(id) {
+  async function saveEdit(item) {
     try {
-      await updateItem(id, {
+      const updated = await updateItem(item.id, {
         name: editForm.name.trim(),
         description: editForm.description.trim() || null,
         price: parseFloat(editForm.price),
         is_offer: editForm.is_offer,
       });
-      toast("Artículo actualizado.", "success");
+      // Detalle en el toast: qué campos cambiaron realmente
+      const cambios = [];
+      if (updated.name !== item.name) cambios.push(`nombre → '${updated.name}'`);
+      if ((updated.description || "") !== (item.description || "")) cambios.push("descripción");
+      if (updated.price !== item.price) cambios.push(`precio → ${formatPrice(updated.price)}`);
+      if (updated.is_offer !== item.is_offer) cambios.push(updated.is_offer ? "marcado en oferta" : "quitado de oferta");
+      toast(
+        cambios.length
+          ? `Artículo ID ${item.id} actualizado: ${cambios.join(", ")}.`
+          : `Artículo ID ${item.id} guardado sin cambios.`,
+        "success"
+      );
       setEditingId(null);
       await load();
     } catch (err) {
-      const detail = err.response?.data?.detail;
-      const msg = typeof detail === "string" ? detail : "No se pudo actualizar el artículo.";
-      toast(msg, "error");
+      toast(apiErrorMessage(err, "No se pudo actualizar el artículo."), "error");
     }
   }
 
-  async function handleDelete(item) {
-    if (!window.confirm(`¿Eliminar el artículo '${item.name}'? Esta acción no se puede deshacer.`)) return;
+  async function confirmDelete() {
+    const item = confirmItem;
+    setDeleting(true);
     try {
       await deleteItem(item.id);
-      toast(`Artículo '${item.name}' eliminado.`, "success");
+      toast(`Artículo '${item.name}' (ID ${item.id}, ${formatPrice(item.price)}) eliminado definitivamente del inventario.`, "success");
+      setConfirmItem(null);
+      setExpandedId(null);
       await load();
-    } catch {
-      toast(`No se pudo eliminar '${item.name}'.`, "error");
+    } catch (err) {
+      toast(apiErrorMessage(err, `No se pudo eliminar '${item.name}'.`), "error");
+      setConfirmItem(null);
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -112,6 +153,9 @@ export default function ItemsPage({ user }) {
         <button className="btn" type="button" onClick={() => setShowForm((v) => !v)}>
           {showForm ? "Cancelar" : "Nuevo artículo"}
         </button>
+        <span className="muted" style={{ fontSize: "0.78rem" }}>
+          Haz clic en una fila para ver el detalle del artículo
+        </span>
         {error && <span className="error-msg">{error}</span>}
       </div>
 
@@ -216,7 +260,7 @@ export default function ItemsPage({ user }) {
                       />
                     </td>
                     <td className="actions-cell">
-                      <button className="btn small primary" onClick={() => saveEdit(item.id)}>
+                      <button className="btn small primary" onClick={() => saveEdit(item)}>
                         Guardar
                       </button>
                       <button className="btn small" onClick={() => setEditingId(null)}>
@@ -225,31 +269,117 @@ export default function ItemsPage({ user }) {
                     </td>
                   </tr>
                 ) : (
-                  <tr key={item.id}>
-                    <td className="mono">{item.id}</td>
-                    <td>{item.name}</td>
-                    <td>{item.description || "—"}</td>
-                    <td className="mono">{formatPrice(item.price)}</td>
-                    <td>
-                      {item.is_offer && <span className="badge warning">OFERTA</span>}
-                    </td>
-                    {isAdmin && (
-                      <td className="actions-cell">
-                        <button className="btn small" onClick={() => startEdit(item)}>
-                          Editar
-                        </button>
-                        <button className="btn small" onClick={() => handleDelete(item)}>
-                          Eliminar
-                        </button>
+                  <Fragment key={item.id}>
+                    <tr
+                      onClick={() => setExpandedId((id) => (id === item.id ? null : item.id))}
+                      style={{ cursor: "pointer" }}
+                    >
+                      <td className="mono">{item.id}</td>
+                      <td>{item.name}</td>
+                      <td>{item.description || "—"}</td>
+                      <td className="mono">{formatPrice(item.price)}</td>
+                      <td>
+                        {item.is_offer && <span className="badge warning">OFERTA</span>}
                       </td>
+                      {isAdmin && (
+                        <td className="actions-cell" onClick={(e) => e.stopPropagation()}>
+                          <button className="btn small" onClick={() => startEdit(item)}>
+                            Editar
+                          </button>
+                          <button className="btn small" onClick={() => setConfirmItem(item)}>
+                            Eliminar
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                    {expandedId === item.id && (
+                      <tr className="detail-row">
+                        <td colSpan={isAdmin ? 6 : 5}>
+                          <div className="item-detail">
+                            <div>
+                              <span className="detail-label">ID</span>
+                              <span className="mono">{item.id}</span>
+                            </div>
+                            <div>
+                              <span className="detail-label">Nombre</span>
+                              <span>{item.name}</span>
+                            </div>
+                            <div>
+                              <span className="detail-label">Precio</span>
+                              <span className="mono">{formatPrice(item.price)}</span>
+                            </div>
+                            <div>
+                              <span className="detail-label">Estado</span>
+                              <span>
+                                {item.is_offer ? <span className="badge warning">OFERTA</span> : "Precio normal"}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="detail-label">Creado por</span>
+                              <span className="mono">usuario #{item.owner_id}</span>
+                            </div>
+                            <div className="full">
+                              <span className="detail-label">Descripción completa</span>
+                              <span>{item.description || "Sin descripción."}</span>
+                            </div>
+                            <div className="full detail-actions">
+                              {isAdmin ? (
+                                <>
+                                  <button className="btn small" onClick={() => startEdit(item)}>
+                                    Editar artículo
+                                  </button>
+                                  <button className="btn small" onClick={() => setConfirmItem(item)}>
+                                    Eliminar artículo
+                                  </button>
+                                </>
+                              ) : (
+                                <span className="muted" style={{ fontSize: "0.78rem" }}>
+                                  Solo los administradores pueden editar o eliminar artículos — tu cuenta tiene rol '{user.role}'.
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
                     )}
-                  </tr>
+                  </Fragment>
                 )
               )
             )}
           </tbody>
         </table>
       </div>
+
+      {confirmItem && (
+        <div className="modal-overlay" onClick={() => setConfirmItem(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>¿Eliminar este artículo?</h3>
+            <div className="item-summary">
+              <div>
+                <strong>{confirmItem.name}</strong>{" "}
+                <span className="mono muted">· ID {confirmItem.id}</span>
+              </div>
+              <div className="muted">{confirmItem.description || "Sin descripción."}</div>
+              <div>
+                <span className="mono">{formatPrice(confirmItem.price)}</span>{" "}
+                {confirmItem.is_offer && <span className="badge warning">OFERTA</span>}
+              </div>
+            </div>
+            <p className="modal-warning">
+              Se eliminará permanentemente del inventario (items_db) y quedará registrado en los
+              logs de auditoría. Esta acción no se puede deshacer.
+            </p>
+            <div className="modal-actions">
+              <button className="btn" onClick={() => setConfirmItem(null)} disabled={deleting}>
+                Cancelar
+              </button>
+              <button className="btn danger" onClick={confirmDelete} disabled={deleting}>
+                {deleting ? "Eliminando…" : "Sí, eliminar definitivamente"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

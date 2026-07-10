@@ -360,6 +360,34 @@ tr.detail-row pre {
   word-break: break-word;
 }
 
+/* ---- Detalle expandido de un artículo (ItemsPage) ---- */
+.item-detail {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px 24px;
+  padding: 6px 0;
+  font-size: 0.85rem;
+}
+
+.item-detail .full { grid-column: 1 / -1; }
+
+.item-detail .detail-label {
+  display: block;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-bottom: 3px;
+}
+
+.item-detail .detail-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
 /* ---- Badges de nivel / severidad ---- */
 .badge {
   display: inline-block;
@@ -391,6 +419,81 @@ td.actions-cell {
 
 td.actions-cell .btn + .btn {
   margin-left: 6px;
+}
+
+/* Botón de acción destructiva (confirmación de borrado) */
+button.btn.danger {
+  background: var(--critical);
+  border-color: var(--critical);
+  color: #fff;
+  font-weight: 600;
+}
+
+button.btn.danger:hover {
+  filter: brightness(1.12);
+  color: #fff;
+  border-color: var(--critical);
+}
+
+button.btn.danger:disabled,
+button.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: none;
+}
+
+/* ---- Modal de confirmación ---- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  padding: 20px;
+}
+
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px 24px;
+  max-width: 460px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+}
+
+.modal h3 {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.modal .item-summary {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85rem;
+}
+
+.modal .modal-warning {
+  color: var(--warning);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.modal .modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 /* ---- Login / Registro ---- */
