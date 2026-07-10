@@ -7,5 +7,6 @@ node_modules/
 dist/
 certs/*.crt
 certs/*.key
-backups/
+backups/*
+!backups/README.md
 scripts/backup.log

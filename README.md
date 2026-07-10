@@ -81,52 +81,82 @@ graph TD
 ```
 python-docker-service/
 │
-├── auth-service/           Microservicio de autenticación y productos
+│  ── Microservicios (un contenedor cada uno) ──────────────────────────
+│
+├── auth-service/           Microservicio de autenticación y productos (FastAPI, :8000)
 │   ├── README.md           Endpoints, variables de entorno y tests de este servicio
 │   ├── app.py              Código principal y dashboard embebido
 │   ├── requirements.txt    Dependencias (FastAPI, JWT, SQLAlchemy, psycopg2, requests)
+│   ├── requirements-dev.txt  Dependencias extra para correr los tests (pytest, httpx)
+│   ├── tests/              Tests pytest del servicio (auth, roles, rate limit)
+│   ├── data/               SQLite local (auth.db) — solo en modo local, no versionado
 │   └── Dockerfile          Imagen Docker del Auth Service
 │
-├── log-service/            Microservicio centralizado de auditoría de logs
+├── log-service/            Microservicio centralizado de auditoría de logs (FastAPI, :8010)
 │   ├── README.md           Endpoints, variables de entorno y tests de este servicio
 │   ├── app.py              Servidor de logs: persiste en MongoDB y publica a RabbitMQ
 │   ├── requirements.txt    Dependencias (FastAPI, Uvicorn, PyMongo, Pika)
 │   └── Dockerfile          Imagen Docker del Log Service
 │
-├── analysis-service/       Microservicio de análisis de eventos
+├── analysis-service/       Microservicio de análisis de eventos (FastAPI, :8002)
 │   ├── README.md           Endpoints, variables de entorno y tests de este servicio
-│   ├── app.py              Consumidor RabbitMQ + API de estadísticas
-│   ├── requirements.txt    Dependencias (FastAPI, Uvicorn, Pika)
+│   ├── app.py              Consumidor RabbitMQ + motor de reglas + API de estadísticas
+│   ├── requirements.txt    Dependencias (FastAPI, Uvicorn, Pika, Redis)
+│   ├── requirements-dev.txt  Dependencias extra para correr los tests (pytest)
+│   ├── tests/              Tests pytest del motor de reglas de detección
 │   └── Dockerfile          Imagen Docker del Analysis Service
 │
-├── dashboard-service/      Frontend React (SOC Dashboard)
-│   ├── README.md           Pantallas, stack y variables de entorno de este servicio
-│   ├── src/                Código React (páginas, API client, tema)
-│   ├── nginx.conf          Servidor de estáticos + reverse proxy /api/*
-│   ├── vite.config.js      Build con Vite (+ proxy de desarrollo)
-│   └── Dockerfile          Build multi-stage: node → nginx
-│
-├── alert-service/          Microservicio de gestión de alertas (Node.js/Express)
+├── alert-service/          Microservicio de gestión de alertas (Node.js/Express, :8003)
 │   ├── README.md           Endpoints, variables de entorno y tests de este servicio
 │   ├── index.js            Consumidor RabbitMQ + persistencia Postgres + API REST
 │   ├── package.json        Dependencias (Express, pg, amqplib)
 │   └── Dockerfile          Imagen Docker del Alert Service
 │
+├── dashboard-service/      Frontend React — SOC Dashboard (nginx, :3000 → https :443)
+│   ├── README.md           Pantallas, stack y variables de entorno de este servicio
+│   ├── src/                Código React (páginas, API client, tema)
+│   ├── index.html          Punto de entrada del build de Vite
+│   ├── package.json        Dependencias (React, axios, Vite)
+│   ├── nginx.conf          Servidor de estáticos + reverse proxy /api/* + TLS
+│   ├── ratelimit.conf      Zona de rate limiting de nginx para /api/*
+│   ├── vite.config.js      Build con Vite (+ proxy de desarrollo)
+│   └── Dockerfile          Build multi-stage: node → nginx
+│
+│  ── Infraestructura y utilidades ─────────────────────────────────────
+│
 ├── postgres-init/          Scripts SQL ejecutados al primer arranque de Postgres
 │   └── 01-create-databases.sql   Crea auth_db, items_db y alerts_db
 │
-├── certs/                  Certificado TLS de desarrollo (no versionado)
+├── certs/                  Certificado TLS de desarrollo (dev.crt/dev.key no versionados)
 │   ├── generate-dev-cert.sh          Genera certs/dev.crt y certs/dev.key (autofirmado, con openssl)
 │   └── generate-dev-cert-mkcert.sh   Alternativa: certificado confiado por el sistema (con mkcert, sin advertencia)
 │
 ├── scripts/
 │   ├── backup.sh           Exporta las 4 bases (Postgres x3 + MongoDB) con timestamp
 │   ├── restore.sh          Restaura un backup generado por backup.sh
+│   ├── backup-scheduled.bat  Wrapper de backup.sh para el Programador de tareas de Windows
 │   └── gen_docs.py         Regenera docs/AUTH_SERVICE_ARCHITECTURE.md desde el código
 │
-├── docker-compose.yml      Orquestación de contenedores, red y volúmenes
-├── .env.example            Plantilla de variables de entorno/credenciales (copiar a .env)
-├── run_local.bat           Script para iniciar los servicios Python localmente (usa SQLite)
+├── backups/                Destino de los respaldos de scripts/backup.sh (ver su README)
+│                           Vacía hasta el primer backup; su contenido no se versiona
+│
+├── docs/                   Documentación técnica del proyecto
+│   ├── PROJECT_SUMMARY.md            Resumen ejecutivo del stack completo
+│   ├── ARCHITECTURE_VISUAL_GUIDE.md  Diagramas de la arquitectura
+│   ├── AUTH_SERVICE_ARCHITECTURE.md  Detalle del Auth Service (generado por gen_docs.py)
+│   └── WEEKS_1-2_IMPLEMENTATION.md   Notas de la implementación inicial
+│
+├── data/                   SQLite local (items.db) — solo en modo local, no versionado
+│
+│  ── Archivos raíz ────────────────────────────────────────────────────
+│
+├── docker-compose.yml      Orquestación de los 9 contenedores, red y volúmenes
+├── .env                    Credenciales reales del stack (NO se versiona)
+├── .env.example            Plantilla de variables de entorno (copiar a .env y ajustar)
+├── .gitignore              Excluye de git: .env, data/, certs (crt/key), backups/, etc.
+├── .dockerignore           Excluye archivos del contexto de build de las imágenes
+├── run_local.bat           Modo local sin Docker: levanta auth y log service con SQLite
+├── test_crud.py            Prueba de humo del CRUD de items (hace login JWT primero)
 └── README.md               Este archivo de documentación
 ```
 
