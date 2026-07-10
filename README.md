@@ -24,7 +24,7 @@ Con el stack levantado (`docker compose up -d --build`), estos son todos los lin
 
 Postgres, MongoDB y Redis **no tienen link** — no están expuestos al navegador a propósito (solo los usan los servicios entre sí). Para inspeccionarlos hay que usar `docker exec` (comandos en la sección [Puertos](#puertos) más abajo).
 
-**Sobre el candado de `https://localhost`:** el certificado es autofirmado (generado con `certs/generate-dev-cert.sh`, ver sección [HTTPS](#https)), así que el navegador va a mostrar una advertencia de seguridad la primera vez — es esperado en desarrollo, hay que aceptar la excepción una sola vez.
+**Sobre el candado de `https://localhost`:** el certificado por defecto es autofirmado (generado con `certs/generate-dev-cert.sh`, ver sección [HTTPS](#https)), así que el navegador va a mostrar una advertencia de seguridad la primera vez — es esperado en desarrollo, hay que aceptar la excepción una sola vez. Si esa advertencia molesta (por ejemplo, porque el puerto 3000 se sigue viendo "No seguro" hasta aceptarla), existe una alternativa sin warning: generar el certificado con `certs/generate-dev-cert-mkcert.sh` en vez del script por defecto — ver sección [HTTPS](#https).
 
 ---
 
@@ -116,7 +116,8 @@ python-docker-service/
 │   └── 01-create-databases.sql   Crea auth_db, items_db y alerts_db
 │
 ├── certs/                  Certificado TLS de desarrollo (no versionado)
-│   └── generate-dev-cert.sh      Genera certs/dev.crt y certs/dev.key
+│   ├── generate-dev-cert.sh          Genera certs/dev.crt y certs/dev.key (autofirmado, con openssl)
+│   └── generate-dev-cert-mkcert.sh   Alternativa: certificado confiado por el sistema (con mkcert, sin advertencia)
 │
 ├── scripts/
 │   ├── backup.sh           Exporta las 4 bases (Postgres x3 + MongoDB) con timestamp
@@ -162,11 +163,24 @@ docker compose down
 
 ### HTTPS
 
-El Dashboard Service sirve por HTTPS en el puerto `443` (`https://localhost`); el puerto `3000` sigue existiendo solo para redirigir automáticamente a `443` (`301 Moved Permanently`). El certificado es **autofirmado**, generado con `certs/generate-dev-cert.sh` — el navegador va a mostrar una advertencia de seguridad ("la conexión no es privada" o similar) la primera vez, porque no está firmado por una autoridad certificadora reconocida. Hay que aceptar la excepción una vez; es el comportamiento esperado en un entorno de desarrollo local, no un error.
+El Dashboard Service sirve por HTTPS en el puerto `443` (`https://localhost`); el puerto `3000` sigue existiendo solo para redirigir automáticamente a `443` (`301 Moved Permanently`) — por eso entrar a `http://localhost:3000` directo también termina en `https://localhost`, aunque de paso muestre el candado roto hasta que se acepte (o se confíe) el certificado.
+
+Por defecto el certificado es **autofirmado**, generado con `certs/generate-dev-cert.sh` — el navegador va a mostrar una advertencia de seguridad ("la conexión no es privada" o similar) la primera vez, porque no está firmado por una autoridad certificadora reconocida. Hay que aceptar la excepción una vez; es el comportamiento esperado en un entorno de desarrollo local, no un error.
+
+**Para eliminar la advertencia por completo** (recomendado si vas a usar el dashboard seguido): generar el certificado con [mkcert](https://github.com/FiloSottile/mkcert) en vez del script por defecto. mkcert crea una autoridad certificadora local y la instala en el almacén de confianza del sistema operativo/navegador, así que el certificado de `https://localhost` queda confiado automáticamente, sin ningún warning.
+
+```bash
+# Una sola vez por máquina de desarrollo:
+mkcert -install                              # instala la CA local como confiable (pide admin/UAC una vez)
+sh certs/generate-dev-cert-mkcert.sh         # genera certs/dev.crt y certs/dev.key firmados por esa CA
+
+# Reconstruir el dashboard para que tome el certificado nuevo:
+docker compose up -d --build dashboard-service
+```
 
 El tramo nginx → microservicios backend (Auth, Log, Analysis, Alert) sigue en HTTP plano, porque viaja únicamente dentro de la red interna de Docker Compose, no expuesta al host — es el mismo patrón que usa cualquier balanceador o reverse proxy que termina TLS en un solo punto de entrada.
 
-Para producción real, `certs/dev.crt`/`certs/dev.key` se reemplazarían por un certificado emitido por una autoridad certificadora (por ejemplo, Let's Encrypt), sin cambiar la configuración de `nginx.conf` más allá de la ruta de los archivos.
+Para producción real, `certs/dev.crt`/`certs/dev.key` se reemplazarían por un certificado emitido por una autoridad certificadora pública (por ejemplo, Let's Encrypt), sin cambiar la configuración de `nginx.conf` más allá de la ruta de los archivos.
 
 ### Backups
 
