@@ -70,3 +70,4 @@ Cada comando de Docker Compose, cada script (`run_local.bat`, `test_crud.py`) y 
 | "¿Cómo se controla qué puede hacer un admin vs un analista?" | `docs/ARCHITECTURE_VISUAL_GUIDE.md` → sección 5 (RBAC) |
 | "¿Cómo pruebo la API sin escribir código?" | `docs/WEEKS_1-2_IMPLEMENTATION.md` → "Testing Endpoints" (Swagger UI en `/docs`) |
 | "¿Qué hace exactamente cada comando/script del proyecto?" | `docs/WEEKS_1-2_IMPLEMENTATION.md` → "Command & Script Reference" |
+| "¿Qué datos guarda el sistema, dónde, y sale algo del equipo?" | `README.md` → sección "Inventario de Datos" (qué se guarda y dónde, sesiones JWT, sin correos ni telemetría — nada sale del equipo salvo `git push`) |

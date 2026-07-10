@@ -400,11 +400,12 @@ Frontend React sin API propia. Su nginx expone la SPA en `/` y reenvía `/api/au
 
 ## Persistencia de Datos en Docker
 
-Docker Compose define tres volúmenes persistentes con drivers locales:
+Docker Compose define cuatro volúmenes persistentes con drivers locales:
 
-1. **`postgres_data`** (montado en `/var/lib/postgresql/data` del contenedor `postgres`): persiste ambas bases de datos (`auth_db`, `items_db`) entre reinicios. Las bases se crean una única vez, en el primer arranque, vía `postgres-init/01-create-databases.sql`.
+1. **`postgres_data`** (montado en `/var/lib/postgresql/data` del contenedor `postgres`): persiste las tres bases de datos (`auth_db`, `items_db`, `alerts_db`) entre reinicios. Las bases se crean una única vez, en el primer arranque, vía `postgres-init/01-create-databases.sql`.
 2. **`mongo_data`** (montado en `/data/db` del contenedor `mongodb`): persiste la base `logs_db` (colección `logs`) entre reinicios.
-3. **`rabbitmq_data`** (montado en `/var/lib/rabbitmq` del contenedor `rabbitmq`): persiste colas y mensajes durables (exchange `logs_events`, cola `analysis_queue`) entre reinicios.
+3. **`rabbitmq_data`** (montado en `/var/lib/rabbitmq` del contenedor `rabbitmq`): persiste colas y mensajes durables (exchanges `logs_events` y `alerts_events`, colas `analysis_queue` y `alerts_queue`) entre reinicios.
+4. **`redis_data`** (montado en `/data` del contenedor `redis`): persiste los contadores de estadísticas del Analysis Service (AOF activado), para que sobrevivan también reinicios del propio Redis.
 
 **Variables de entorno de conexión de Auth Service** (definidas en `docker-compose.yml`, con valores tomados de `.env`): `POSTGRES_HOST=postgres`, `POSTGRES_PORT=5432`, `POSTGRES_USER`/`POSTGRES_PASSWORD` (`${POSTGRES_USER}`/`${POSTGRES_PASSWORD}`), `JWT_SECRET_KEY`, `CORS_ORIGINS`. Auth Service espera activamente (`_wait_for_postgres`, hasta 15 reintentos) a que Postgres acepte conexiones antes de crear las tablas — necesario porque el healthcheck de Docker garantiza que el proceso esté "healthy" pero no elimina toda condición de carrera en el primer arranque.
 
@@ -413,3 +414,46 @@ Docker Compose define tres volúmenes persistentes con drivers locales:
 **Variables de entorno del Analysis Service**: `RABBITMQ_HOST=rabbitmq`, `RABBITMQ_PORT=5672`, `RABBITMQ_USER`/`RABBITMQ_PASSWORD`, `CORS_ORIGINS` (tomados de `.env`). El hilo consumidor espera activamente (`_wait_for_rabbitmq`, hasta 15 reintentos) y se reconecta solo si la conexión se cae.
 
 Todas las credenciales y secretos viven en `.env` (no versionado, ver `.gitignore`); `.env.example` documenta cada variable con su valor por defecto de desarrollo.
+
+---
+
+## Inventario de Datos: qué se guarda, dónde y qué sale del equipo
+
+Resumen tipo *data inventory* (lo que pediría una auditoría): qué datos maneja la plataforma, dónde viven físicamente, cómo se consultan y qué — si algo — abandona la máquina.
+
+### Qué se guarda y dónde
+
+Todo vive **únicamente en este equipo**. Los almacenes y su contenido:
+
+| Datos | Almacén | Dónde vive físicamente |
+|---|---|---|
+| Usuarios: username, email, contraseña **hasheada con bcrypt** (nunca en texto plano), rol, fecha de creación | PostgreSQL `auth_db` | volumen `postgres_data` (disco de Docker Desktop) |
+| Artículos del CRUD (nombre, descripción, precio, oferta) | PostgreSQL `items_db` | volumen `postgres_data` |
+| Alertas de seguridad (severidad, estado, evento disparador) | PostgreSQL `alerts_db` | volumen `postgres_data` |
+| Logs de auditoría: cada login (exitoso o fallido), registro, acción CRUD y acceso denegado (401/403), con usuario y timestamp | MongoDB `logs_db.logs` | volumen `mongo_data` |
+| Contadores de estadísticas y últimos eventos (caché) | Redis | volumen `redis_data` |
+| Mensajes en tránsito entre servicios (se consumen y se borran) | RabbitMQ | volumen `rabbitmq_data` |
+| Backups de las 4 bases (diario 3 AM + manuales) | carpeta `backups/` | repo local (no versionada) |
+| Credenciales y secreto JWT | archivo `.env` | repo local (no versionado) |
+| Token JWT de la sesión activa | `localStorage` | navegador de cada usuario |
+
+### Dónde se consultan
+
+- **Dashboard ([https://localhost](https://localhost))**: logs, estadísticas, alertas, artículos y usuarios — la vista principal de todos los datos.
+- **RabbitMQ ([http://localhost:15672](http://localhost:15672))**: colas y mensajes en tránsito.
+- **Por terminal**: Postgres, MongoDB y Redis no se exponen al navegador a propósito; se inspeccionan con los comandos `docker exec` de la sección [Puertos](#puertos).
+
+### Quién entrega y quién recibe
+
+El único punto de entrada desde afuera es **nginx** (dashboard-service): el navegador nunca habla directo con los microservicios. Internamente: Auth Service reporta cada evento al Log Service (HTTP); Log Service lo persiste en MongoDB y lo publica en RabbitMQ; Analysis Service lo consume, aplica las reglas de detección y publica las alertas; Alert Service las consume y las guarda en PostgreSQL. Ver el diagrama de [Diseño y Arquitectura](#diseño-y-arquitectura).
+
+### Sesiones
+
+No hay sesiones en el servidor: se usa **JWT stateless**. Al hacer login, Auth Service firma un token (HMAC-SHA256, secreto en `.env`) con **expiración de 60 minutos**; el navegador lo guarda en `localStorage` y lo envía en cada petición (`Authorization: Bearer`). Cerrar sesión = borrar el token del navegador. Un token ya emitido sigue siendo válido hasta su expiración natural, incluso tras un cambio de contraseña (no hay lista de revocación — decisión consciente de simplicidad para un entorno de desarrollo).
+
+### Qué sale del equipo
+
+- **Correos: ninguno.** El email del registro solo se guarda como dato de perfil; no existe servidor de correo ni envío alguno.
+- **Telemetría/analytics: ninguna.** Ningún servicio llama a APIs externas.
+- **Lo único que sale**, y siempre iniciado manualmente: el `git push` a GitHub (solo código — `.env`, `backups/` y los certificados están en `.gitignore`) y la descarga de imágenes desde Docker Hub durante el build (bajada, no subida).
+- **Qué ejecuta esta máquina:** los 9 contenedores de Docker Compose y la Tarea Programada de Windows del backup diario (3 AM). Nada más.
