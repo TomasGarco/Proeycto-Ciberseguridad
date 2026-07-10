@@ -195,6 +195,7 @@ Base.metadata.create_all(bind=items_engine)
 | hashed_password | `String` | nullable=False |
 | role | `String(20)` | default=analista |
 | created_at | `DateTime` | default=datetime.utcnow |
+| password_changed_at | `DateTime` | nullable=True |
 <!-- AUTO-GENERATED:END:auth-orm -->
 
 **Ejemplo de registro (UserORM):**

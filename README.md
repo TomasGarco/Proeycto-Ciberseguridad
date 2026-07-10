@@ -449,7 +449,7 @@ El único punto de entrada desde afuera es **nginx** (dashboard-service): el nav
 
 ### Sesiones
 
-No hay sesiones en el servidor: se usa **JWT stateless**. Al hacer login, Auth Service firma un token (HMAC-SHA256, secreto en `.env`) con **expiración de 60 minutos**; el navegador lo guarda en `localStorage` y lo envía en cada petición (`Authorization: Bearer`). Cerrar sesión = borrar el token del navegador. Un token ya emitido sigue siendo válido hasta su expiración natural, incluso tras un cambio de contraseña (no hay lista de revocación — decisión consciente de simplicidad para un entorno de desarrollo).
+No hay sesiones en el servidor: se usa **JWT stateless**. Al hacer login, Auth Service firma un token (HMAC-SHA256, secreto en `.env`) con **expiración de 60 minutos**; el navegador lo guarda en `localStorage` y lo envía en cada petición (`Authorization: Bearer`). Cerrar sesión = borrar el token del navegador. Al **cambiar la contraseña**, todos los tokens emitidos antes del cambio quedan revocados: cada token lleva su fecha de emisión (`iat`) y se compara contra `users.password_changed_at` — sin necesidad de mantener una lista de tokens revocados. El usuario debe iniciar sesión de nuevo con la contraseña nueva.
 
 ### Qué sale del equipo
 

@@ -1,3 +1,4 @@
+import calendar
 import json
 import os
 import time
@@ -20,7 +21,7 @@ from fastapi.openapi.docs import (
 from pydantic import BaseModel, Field, field_validator
 from passlib.context import CryptContext
 from jose import JWTError, jwt
-from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, DateTime
+from sqlalchemy import create_engine, inspect, text, Column, Integer, String, Float, Boolean, DateTime
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
 # ============================================================
@@ -216,9 +217,21 @@ class UserORM(AuthBase):
     hashed_password = Column(String, nullable=False)
     role            = Column(String(20), default="analista")  # "analista" | "admin"
     created_at      = Column(DateTime, default=datetime.utcnow)
+    # Marca de tiempo del último cambio de contraseña: los tokens emitidos
+    # antes de esta fecha se rechazan en get_current_user() (revocación sin
+    # necesidad de una lista de tokens). NULL = nunca cambió la contraseña.
+    password_changed_at = Column(DateTime, nullable=True)
 
 
 AuthBase.metadata.create_all(bind=auth_engine)
+
+# Micro-migración: create_all() no agrega columnas a tablas que ya existen,
+# así que en bases creadas antes de esta versión hay que sumar la columna a
+# mano. ALTER TABLE ... ADD COLUMN funciona igual en PostgreSQL y SQLite.
+if "password_changed_at" not in [c["name"] for c in inspect(auth_engine).get_columns("users")]:
+    with auth_engine.begin() as conn:
+        conn.execute(text("ALTER TABLE users ADD COLUMN password_changed_at TIMESTAMP"))
+    log_event("INFO", "startup", "Columna users.password_changed_at agregada (migración automática).")
 
 # ============================================================
 # PYDANTIC SCHEMAS
@@ -327,8 +340,11 @@ def hash_password(password: str) -> str:
 
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
-    expire    = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
+    now       = datetime.utcnow()
+    expire    = now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    # "iat" (issued at) permite compararlo contra users.password_changed_at
+    # y rechazar tokens emitidos antes del último cambio de contraseña.
+    to_encode.update({"exp": expire, "iat": now})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
@@ -370,6 +386,21 @@ def get_current_user(
     if not user:
         send_log("ERROR", f"Token válido pero el usuario '{username}' ya no existe en la base de datos.")
         raise HTTPException(status_code=401, detail="Usuario no encontrado.")
+    if user.password_changed_at is not None:
+        # Revocación por marca de tiempo: si el token se emitió antes del último
+        # cambio de contraseña (o ni siquiera trae "iat", por ser anterior a esta
+        # versión), se rechaza y el usuario debe volver a iniciar sesión.
+        # timegm() interpreta el datetime naive como UTC — igual que python-jose
+        # codifica el "iat" — así la comparación no depende de la zona horaria local.
+        iat = payload.get("iat")
+        changed_epoch = calendar.timegm(user.password_changed_at.utctimetuple())
+        if iat is None or iat < changed_epoch:
+            send_log("WARNING", f"Token de '{username}' rechazado: fue emitido antes del último cambio de contraseña.")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="El token fue emitido antes del último cambio de contraseña. Iniciá sesión de nuevo.",
+                headers={"WWW-Authenticate": "Bearer"}
+            )
     return user
 
 
@@ -788,8 +819,9 @@ def change_password(
     """
     Cambia la contraseña del usuario autenticado. Requiere enviar la contraseña
     **actual** para verificarla antes de aplicar la nueva (mínimo 8 caracteres,
-    con mayúscula, minúscula y número). Los tokens ya emitidos siguen siendo
-    válidos hasta su expiración natural — este endpoint no los revoca.
+    con mayúscula, minúscula y número). Todos los tokens emitidos antes del
+    cambio quedan revocados (incluido el usado en esta petición): hay que
+    volver a iniciar sesión con la contraseña nueva.
     """
     if not verify_password(data.current_password, current_user.hashed_password):
         # Llamada directa (no add_task): las BackgroundTasks se descartan al
@@ -798,9 +830,10 @@ def change_password(
         raise HTTPException(status_code=400, detail="La contraseña actual es incorrecta.")
 
     current_user.hashed_password = hash_password(data.new_password)
+    current_user.password_changed_at = datetime.utcnow()
     db.commit()
-    background_tasks.add_task(send_log, "INFO", f"El usuario '{current_user.username}' cambió su contraseña.")
-    return {"status": "success", "message": "Contraseña actualizada correctamente."}
+    background_tasks.add_task(send_log, "INFO", f"El usuario '{current_user.username}' cambió su contraseña; sus tokens anteriores quedaron revocados.")
+    return {"status": "success", "message": "Contraseña actualizada correctamente. Iniciá sesión de nuevo con la contraseña nueva."}
 
 
 @app.get(
@@ -2259,8 +2292,8 @@ def read_root():
             const currentPw = document.getElementById('pw-current').value;
             const newPw = document.getElementById('pw-new').value;
 
-            if (newPw.length < 6) {
-                showError(msgEl, 'La nueva contraseña debe tener mínimo 6 caracteres');
+            if (newPw.length < 8) {
+                showError(msgEl, 'La nueva contraseña debe tener mínimo 8 caracteres (con mayúscula, minúscula y número)');
                 return false;
             }
 
@@ -2274,8 +2307,11 @@ def read_root():
                 if (!response.ok) {
                     throw new Error(data.detail || 'No se pudo cambiar la contraseña');
                 }
-                showSuccess(msgEl, 'Contraseña actualizada correctamente');
+                showSuccess(msgEl, 'Contraseña actualizada. Los tokens anteriores quedaron revocados — vas a tener que iniciar sesión de nuevo.');
                 pwChangeForm.reset();
+                // El token actual quedó revocado por el cambio: cerrar sesión de
+                // forma controlada en vez de dejar que la próxima petición dé 401.
+                setTimeout(doLogout, 2500);
             } catch (error) {
                 showError(msgEl, error.message);
             }
