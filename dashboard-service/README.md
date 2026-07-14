@@ -28,7 +28,7 @@ El contexto de build de este servicio es la **raíz del repo** (no `dashboard-se
 | `AlertsPage.jsx` | Alertas con búsqueda/orden/detalle/gráfico por severidad | ciclo de vida (reconocer/cerrar) solo `admin` |
 | `RulesPage.jsx` | Reglas de detección del motor de análisis, con tipo/severidad/parámetros y estado | activar/desactivar solo `admin` |
 | `ItemsPage.jsx` | CRUD de artículos | crear: cualquier rol · editar/eliminar: solo `admin` |
-| `UsersPage.jsx` | Gestión de usuarios (cambio de rol) | solo `admin` |
+| `UsersPage.jsx` | Gestión de usuarios (cambio de rol) y sesiones activas en Redis (con revocación) | solo `admin` |
 
 El botón **Cerrar sesión** llama a `POST /auth/logout` para revocar la sesión en Redis (server-side) antes de descartar el token local.
 

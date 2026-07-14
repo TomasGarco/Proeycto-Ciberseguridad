@@ -24,6 +24,19 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Payload del JWT guardado (sub, role, jti...), decodificado en el cliente.
+// Solo lectura de datos no sensibles — la validez del token la decide el
+// backend contra su firma y la sesión en Redis.
+export function getTokenPayload() {
+  const token = getToken();
+  if (!token) return null;
+  try {
+    return JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")));
+  } catch {
+    return null;
+  }
+}
+
 // --- Auth Service ---
 
 export async function login(username, password) {
@@ -62,6 +75,16 @@ export async function fetchUsers() {
 
 export async function updateUserRole(userId, role) {
   const { data } = await api.patch(`/api/auth/users/${userId}/role`, { role });
+  return data;
+}
+
+export async function fetchSessions() {
+  const { data } = await api.get("/api/auth/sessions");
+  return data;
+}
+
+export async function revokeSession(jti) {
+  const { data } = await api.delete(`/api/auth/sessions/${jti}`);
   return data;
 }
 
