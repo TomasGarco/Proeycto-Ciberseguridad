@@ -6,7 +6,7 @@ FastAPI · RabbitMQ (consume `analysis_queue`, publica `alerts_events`) · Redis
 
 Un hilo dedicado consume la cola `analysis_queue` (binding `logs.#`) y le aplica a cada evento el motor de reglas de detección definido en la lista `RULES` (dentro de `app.py`): umbral (N eventos en una ventana de tiempo), patrón (regex) y palabra clave. Cada alerta disparada se publica en el exchange `alerts_events` con routing key `alerts.<severidad>`.
 
-**Nota sobre "umbrales configurables":** los valores de `threshold` y `window_seconds` de cada regla están hardcodeados en `RULES` dentro del código fuente — para cambiarlos hay que editar `app.py` y reconstruir la imagen, no son variables de entorno. No existe una regla de "fuera de horario".
+**Nota sobre "umbrales configurables":** los valores de `threshold` y `window_seconds` de cada regla están hardcodeados en `RULES` dentro del código fuente — para cambiarlos hay que editar `app.py` y reconstruir la imagen, no son variables de entorno. Lo que sí es configurable en caliente es el **estado de cada regla**: `PATCH /rules/{id}` (solo `admin`, también desde la pestaña Reglas del dashboard) la activa o desactiva sin reiniciar nada, y el estado persiste en Redis (`analysis:reglas_estado`) entre reinicios. No existe una regla de "fuera de horario".
 
 ## Endpoints principales
 
@@ -15,11 +15,12 @@ Un hilo dedicado consume la cola `analysis_queue` (binding `logs.#`) y le aplica
 | `GET` | `/api/health` | ninguna | Estado del servicio |
 | `GET` | `/stats` | JWT (cualquier rol) | Estadísticas agregadas (por nivel, por servicio, por severidad de alerta) |
 | `GET` | `/events/recent` | JWT (cualquier rol) | Últimos eventos consumidos (máx. 50, en memoria/Redis) |
-| `GET` | `/rules` | JWT (cualquier rol) | Lista de reglas activas |
+| `GET` | `/rules` | JWT (cualquier rol) | Lista de reglas con su estado activada/desactivada |
+| `PATCH` | `/rules/{id}` | JWT rol `admin` | Activar/desactivar una regla en caliente (persiste en Redis) |
 
 Swagger/OpenAPI (autogenerado por FastAPI): `http://localhost:8002/docs`.
 
-**Autenticación (Semana 10):** los 3 endpoints de lectura exigen un JWT válido emitido por auth-service — sin restricción de rol, porque la pestaña Estadísticas del dashboard la ve tanto `analista` como `admin`.
+**Autenticación (Semana 10):** los 3 endpoints de lectura exigen un JWT válido emitido por auth-service — sin restricción de rol, porque la pestaña Estadísticas del dashboard la ve tanto `analista` como `admin`. `PATCH /rules/{id}` exige además rol `admin`, igual que `PATCH /alerts/:id` en el alert-service.
 
 ## Variables de entorno
 
