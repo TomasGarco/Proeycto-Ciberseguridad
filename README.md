@@ -96,6 +96,8 @@ python-docker-service/
 │   ├── README.md           Endpoints, variables de entorno y tests de este servicio
 │   ├── app.py              Servidor de logs: persiste en MongoDB y publica a RabbitMQ
 │   ├── requirements.txt    Dependencias (FastAPI, Uvicorn, PyMongo, Pika)
+│   ├── requirements-dev.txt  Dependencias extra para correr los tests (pytest, httpx)
+│   ├── tests/              Tests pytest del servicio (registro/consulta de logs, JWT)
 │   └── Dockerfile          Imagen Docker del Log Service
 │
 ├── analysis-service/       Microservicio de análisis de eventos (FastAPI, :8002)

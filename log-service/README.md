@@ -31,7 +31,12 @@ Cada evento recibido por `POST /logs` se ecoa por stdout como JSON (`category: "
 
 ## Tests
 
-Este servicio no tiene tests automatizados propios todavía.
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+`tests/test_logs.py` cubre el registro de eventos (`POST /logs`), la consulta con filtros por servicio/nivel y límite (`GET /logs`), la exigencia de JWT en las lecturas y el healthcheck. MongoDB se reemplaza por un doble en memoria (ver `tests/conftest.py`), así que corren sin ningún contenedor levantado.
 
 ## Levantar solo este servicio
 
