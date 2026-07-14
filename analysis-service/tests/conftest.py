@@ -19,13 +19,17 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def reglas_sin_estado():
-    """Vacía las ventanas deslizantes de las reglas de umbral antes de cada test.
+    """Vacía las ventanas deslizantes de las reglas de umbral antes de cada test
+    y deja todas las reglas activadas al terminar.
 
     Sin esto, un test de fuerza bruta dejaría timestamps en _threshold_windows
-    que contaminarían el siguiente test.
+    (o una regla desactivada por los tests de PATCH /rules) que contaminarían
+    el siguiente test.
     """
     import app
 
     app._threshold_windows.clear()
     yield
     app._threshold_windows.clear()
+    for rule in app.RULES:
+        rule["enabled"] = True

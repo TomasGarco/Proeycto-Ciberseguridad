@@ -60,6 +60,15 @@ def require_authenticated(credentials: HTTPAuthorizationCredentials = Depends(_b
         raise HTTPException(status_code=401, detail="Token inválido o expirado.")
     return payload
 
+
+def require_admin(payload: dict = Depends(require_authenticated)):
+    """Configurar reglas es solo para rol `admin` — el analista puede
+    consultarlas (GET /rules) pero no activarlas/desactivarlas. Mismo
+    patrón que PATCH /alerts/:id en el alert-service."""
+    if payload.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Acceso denegado. Se requiere rol de administrador.")
+    return payload
+
 LOGS_EXCHANGE = "logs_events"
 ANALYSIS_QUEUE = "analysis_queue"
 BINDING_KEY = "logs.#"
@@ -125,6 +134,9 @@ RULES = [
 for _rule in RULES:
     if _rule["type"] == "patron":
         _rule["pattern_re"] = re.compile(_rule["pattern"], re.IGNORECASE)
+    # Toda regla nace activa; PATCH /rules/{id} (solo admin) la puede
+    # desactivar en caliente y el estado persiste en Redis entre reinicios.
+    _rule["enabled"] = True
 
 # Ventanas deslizantes de las reglas de umbral (timestamps de eventos
 # coincidentes). Solo las toca el hilo consumidor — no necesita lock.
@@ -141,6 +153,8 @@ def _evaluate_event(event: dict) -> List[dict]:
     alerts = []
 
     for rule in RULES:
+        if not rule["enabled"]:
+            continue
         fired = False
         detail = ""
 
@@ -245,6 +259,18 @@ def _restore_stats_from_redis():
         log_event("INFO", "REDIS", f"Contadores restaurados: {_stats['total_eventos']} eventos, {_stats['alertas_generadas']} alertas.")
 
 
+def _restore_rules_from_redis():
+    """Recarga el estado activada/desactivada de cada regla, para que la
+    configuración hecha desde el dashboard sobreviva reinicios del servicio."""
+    saved = _redis.hgetall("analysis:reglas_estado")
+    for rule in RULES:
+        if rule["id"] in saved:
+            rule["enabled"] = saved[rule["id"]] == "1"
+    disabled = [rule["id"] for rule in RULES if not rule["enabled"]]
+    if disabled:
+        log_event("INFO", "REGLAS", f"Reglas desactivadas restauradas desde Redis: {', '.join(disabled)}")
+
+
 def _persist_event_to_redis(event: dict, level: str, service: str, alerts: List[dict], timestamp: str):
     """Espejo en Redis de lo que _on_message acumula en memoria (write-through)."""
     if _redis is None:
@@ -270,6 +296,7 @@ if REDIS_HOST:
     _redis = _connect_redis()
     if _redis is not None:
         _restore_stats_from_redis()
+        _restore_rules_from_redis()
 
 
 def _wait_for_rabbitmq(retries: int = 15, delay_seconds: float = 2.0) -> pika.BlockingConnection:
@@ -367,10 +394,10 @@ app = FastAPI(
     title="Analysis Service",
     description=(
         "Microservicio de análisis de eventos: consume logs desde RabbitMQ, aplica reglas de "
-        "detección (umbral, patrón, palabra clave), publica alertas con severidad y expone "
-        "estadísticas agregadas persistidas en Redis."
+        "detección (umbral, patrón, palabra clave) configurables en caliente, publica alertas "
+        "con severidad y expone estadísticas agregadas persistidas en Redis."
     ),
-    version="2.1.0",
+    version="2.2.0",
 )
 
 app.add_middleware(
@@ -424,8 +451,33 @@ def get_stats(_: dict = Depends(require_authenticated)):
 
 @app.get("/rules", response_model=List[dict], tags=["Análisis"])
 def get_rules(_: dict = Depends(require_authenticated)):
-    """Reglas de detección configuradas en el motor de análisis. **Requiere estar autenticado.**"""
+    """Reglas de detección configuradas en el motor de análisis, con su estado
+    activada/desactivada (`enabled`). **Requiere estar autenticado.**"""
     return [{k: v for k, v in rule.items() if k != "pattern_re"} for rule in RULES]
+
+
+class RuleToggle(BaseModel):
+    enabled: bool = Field(..., example=False)
+
+
+@app.patch("/rules/{rule_id}", tags=["Análisis"])
+def toggle_rule(rule_id: str, body: RuleToggle, _: dict = Depends(require_admin)):
+    """Activa o desactiva una regla de detección. **Solo rol `admin`.**
+
+    El cambio aplica de inmediato (el hilo consumidor lee el flag en el
+    próximo evento) y, con Redis disponible, sobrevive reinicios del servicio.
+    """
+    rule = next((r for r in RULES if r["id"] == rule_id), None)
+    if rule is None:
+        raise HTTPException(status_code=404, detail=f"No existe la regla '{rule_id}'.")
+    rule["enabled"] = body.enabled
+    if _redis is not None:
+        try:
+            _redis.hset("analysis:reglas_estado", rule_id, "1" if body.enabled else "0")
+        except redis.exceptions.RedisError as e:
+            log_event("WARNING", "REDIS", f"No se pudo persistir el estado de la regla '{rule_id}' ({e}) — aplica hasta el próximo reinicio.")
+    log_event("INFO", "REGLAS", f"Regla '{rule_id}' {'activada' if body.enabled else 'desactivada'}.")
+    return {k: v for k, v in rule.items() if k != "pattern_re"}
 
 
 @app.get("/events/recent", response_model=List[dict], tags=["Análisis"])
