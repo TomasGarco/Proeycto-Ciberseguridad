@@ -44,6 +44,17 @@ export async function fetchMe() {
   return data;
 }
 
+export async function logout() {
+  // Revoca la sesión en el servidor (Redis) antes de descartar el token local;
+  // si el backend no responde, igual se cierra la sesión del lado del cliente.
+  try {
+    await api.post("/api/auth/logout");
+  } catch {
+    /* el token se descarta abajo de todas formas */
+  }
+  setToken(null);
+}
+
 export async function fetchUsers() {
   const { data } = await api.get("/api/auth/users");
   return data;
@@ -94,6 +105,16 @@ export async function fetchStats() {
 
 export async function fetchRecentEvents(limit = 20) {
   const { data } = await api.get("/api/analysis/events/recent", { params: { limit } });
+  return data;
+}
+
+export async function fetchRules() {
+  const { data } = await api.get("/api/analysis/rules");
+  return data;
+}
+
+export async function updateRule(id, enabled) {
+  const { data } = await api.patch(`/api/analysis/rules/${id}`, { enabled });
   return data;
 }
 

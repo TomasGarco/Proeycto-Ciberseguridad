@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { fetchMe, getToken, setToken } from "./api";
+import { fetchMe, getToken, setToken, logout as apiLogout } from "./api";
 import { useToast } from "./toast";
 import Logo from "./logo";
 import LoginPage from "./pages/LoginPage";
 import LogsPage from "./pages/LogsPage";
 import StatsPage from "./pages/StatsPage";
 import AlertsPage from "./pages/AlertsPage";
+import RulesPage from "./pages/RulesPage";
 import UsersPage from "./pages/UsersPage";
 import ItemsPage from "./pages/ItemsPage";
 
@@ -13,6 +14,7 @@ const TABS = [
   { id: "logs", label: "Logs" },
   { id: "stats", label: "Estadísticas" },
   { id: "alerts", label: "Alertas" },
+  { id: "rules", label: "Reglas" },
   { id: "items", label: "Artículos" },
   { id: "users", label: "Usuarios", adminOnly: true },
 ];
@@ -35,8 +37,9 @@ export default function App() {
       .finally(() => setChecking(false));
   }, [toast]);
 
-  function logout() {
-    setToken(null);
+  async function logout() {
+    // apiLogout revoca la sesión en Redis (server-side) y descarta el token local
+    await apiLogout();
     setUser(null);
     setTab("logs");
     toast("Sesión cerrada correctamente.", "success");
@@ -89,6 +92,7 @@ export default function App() {
         {tab === "logs" && <LogsPage />}
         {tab === "stats" && <StatsPage />}
         {tab === "alerts" && <AlertsPage user={user} />}
+        {tab === "rules" && <RulesPage user={user} />}
         {tab === "items" && <ItemsPage user={user} />}
         {tab === "users" && user.role === "admin" && <UsersPage user={user} />}
       </main>
