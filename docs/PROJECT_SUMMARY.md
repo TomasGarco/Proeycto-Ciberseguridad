@@ -8,7 +8,7 @@
 
 ## 1. El elevator pitch (30 segundos)
 
-> "Es una plataforma SOC/SIEM — un sistema de monitoreo de seguridad que recolecta logs, los analiza y genera alertas. Son 5 microservicios en 8 contenedores Docker: autenticación con JWT y roles (FastAPI + PostgreSQL), recolección de logs (FastAPI + MongoDB), análisis con un motor de reglas de detección que evalúa severidad (umbral, patrón, palabra clave), gestión de alertas con ciclo de vida de incidentes (Node.js + PostgreSQL) y un dashboard en React. Los servicios se comunican de forma asíncrona por RabbitMQ y Redis actúa como capa de caché de las estadísticas. La arquitectura objetivo del roadmap está completa."
+> "Es una plataforma SOC/SIEM — un sistema de monitoreo de seguridad que recolecta logs, los analiza y genera alertas. Son 5 microservicios en 9 contenedores Docker: autenticación con JWT y roles (FastAPI + PostgreSQL), recolección de logs (FastAPI + MongoDB), análisis con un motor de reglas de detección que evalúa severidad (umbral, patrón, palabra clave), gestión de alertas con ciclo de vida de incidentes (Node.js + PostgreSQL) y un dashboard en React. Los servicios se comunican de forma asíncrona por RabbitMQ y Redis actúa como capa de caché de las estadísticas. La arquitectura objetivo del roadmap está completa."
 
 ## 2. Qué es un SOC/SIEM (el contexto de negocio)
 
@@ -20,7 +20,7 @@ Detalle completo del objetivo, alcance y arquitectura: **[`README.md`](../README
 
 ## 3. Qué existe hoy — el estado real del código
 
-Ocho contenedores orquestados con `docker-compose.yml`: los 5 servicios de aplicación (Auth, Log, Analysis, Alert, Dashboard) más PostgreSQL, MongoDB y RabbitMQ. Detalle de puertos, responsabilidades y variables de conexión: **[`README.md`](../README.md)** (secciones "Diseño y Arquitectura" y "Persistencia de Datos en Docker").
+Nueve contenedores orquestados con `docker-compose.yml`: los 5 servicios de aplicación (Auth, Log, Analysis, Alert, Dashboard) más PostgreSQL, MongoDB, RabbitMQ y Redis. Detalle de puertos, responsabilidades y variables de conexión: **[`README.md`](../README.md)** (secciones "Diseño y Arquitectura" y "Persistencia de Datos en Docker").
 
 La comunicación es asíncrona en dos tramos vía RabbitMQ: Log Service publica cada evento al exchange `logs_events` (lo consume Analysis Service) y Analysis Service publica cada alerta disparada al exchange `alerts_events` (lo consume Alert Service, que la persiste en PostgreSQL). Solo el tramo Auth → Log es HTTP directo (`requests` + `BackgroundTasks` de FastAPI).
 
