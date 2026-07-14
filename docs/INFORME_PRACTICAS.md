@@ -28,11 +28,11 @@ Uno de los aprendizajes centrales fue entender qué es un microservicio y por qu
 
 - **Auth Service** — el que maneja usuarios: registro, login, roles (`admin` / `analista`) y emisión de tokens JWT. Es la puerta de entrada del sistema.
 - **Log Service** — recibe y guarda los eventos que genera el resto del sistema (por ejemplo, un login fallido). Los almacena en MongoDB.
-- **Analysis Service** — el "cerebro" de detección: revisa los eventos que llegan y aplica reglas (por umbral, por patrón, por palabra clave) para decidir si algo es sospechoso. Si detecta algo, genera una alerta.
+- **Analysis Service** — el "cerebro" de detección: revisa los eventos que llegan y aplica reglas (por umbral, por patrón, por palabra clave) para decidir si algo es sospechoso. Si detecta algo, genera una alerta. Las reglas se pueden activar y desactivar en caliente desde el dashboard (solo el rol admin), sin reiniciar nada.
 - **Alert Service** — recibe las alertas que genera Analysis y las gestiona: las guarda, les da un ciclo de vida (nueva → reconocida → cerrada) y expone la API para que el dashboard las muestre.
 - **Dashboard Service** — la interfaz en React donde se ve todo: logs, alertas activas y métricas del sistema.
 
-Y por debajo, la infraestructura que los conecta: **PostgreSQL** (usuarios e items), **MongoDB** (logs), **RabbitMQ** (mensajería entre Log→Analysis y Analysis→Alert, para que un servicio caído no tumbe a los demás) y **Redis** (caché de estadísticas, para que no se pierdan si el contenedor se reinicia). Todo vive en el mismo repositorio, cada servicio en su propia carpeta con su propio `Dockerfile`.
+Y por debajo, la infraestructura que los conecta: **PostgreSQL** (usuarios e items), **MongoDB** (logs), **RabbitMQ** (mensajería entre Log→Analysis y Analysis→Alert, para que un servicio caído no tumbe a los demás) y **Redis** (caché de estadísticas, para que no se pierdan si el contenedor se reinicia, y almacén de las sesiones activas). Todo vive en el mismo repositorio, cada servicio en su propia carpeta con su propio `Dockerfile`.
 
 ## JWT — cómo protegí la autenticación
 
@@ -44,6 +44,7 @@ De ahí entendí varias cosas importantes:
 - El secreto de ejemplo que trae el repo (`changeme-super-secret-key...`) es solo para desarrollo; para algo real hay que generar uno propio de 256 bits y no subirlo nunca a Git.
 - Si un usuario cambia de contraseña, los tokens viejos deberían dejar de servir — así que agregué una verificación para revocar los tokens emitidos antes del último cambio de contraseña.
 - Los roles (`admin` / `analista`) viajan dentro del token, así que cada endpoint protegido puede decidir quién entra según el rol, sin tener que consultar la base de datos en cada petición.
+- Un JWT puro tiene una limitación que descubrí en la práctica: una vez emitido, vale hasta que expira — no hay forma de "apagarlo". Por eso sumé Redis como **manejo de sesiones**: cada login registra una sesión con la misma vida del token, y cerrar sesión la borra del servidor, con lo que ese token deja de aceptarse al instante. De paso, un admin puede ver las sesiones activas y expulsar una sospechosa sin esperar a que expire.
 
 ## Configuración: `.env` y `.env.example`
 

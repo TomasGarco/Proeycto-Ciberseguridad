@@ -57,18 +57,19 @@ graph TD
     Analysis -->|publica alerts_events| MQ
     MQ -->|consume alerts_queue| AlertServ
     AlertServ -->|pg| PGA[(PostgreSQL: alerts_db)]
-    Analysis -->|contadores write-through| Redis[(Redis: caché de estadísticas)]
+    Analysis -->|contadores write-through| Redis[(Redis: caché + sesiones)]
+    Auth -->|"sesiones session:&lt;jti&gt;"| Redis
 ```
 
 **Características principales**
 - **Dashboard Service ([puerto 3000](http://localhost:3000)) — dashboard principal del proyecto:** frontend en React (Vite + Recharts + Axios) servido por nginx, que además actúa como reverse proxy hacia los demás servicios (un solo origen, sin CORS). Login y registro con validación en vivo de requisitos de cuenta/contraseña (con mostrar/ocultar contraseña y errores anclados a cada campo), notificaciones toast, tabla de logs en vivo con filtros, estadísticas con gráficos, alertas con búsqueda/orden/detalle del evento disparador, **CRUD de artículos** y gestión de usuarios (cambio de rol) para el rol `admin`. Panel diferenciado por rol: un usuario `analista` ve las mismas pantallas de solo consulta, pero no puede editar/eliminar artículos, cambiar roles ni reconocer/cerrar alertas. Este es el punto de entrada de la plataforma desde la Semana 7.
-- **Auth Service ([puerto 8000](http://localhost:8000)):** API REST principal + dashboard embebido (anterior al de React; se mantiene como consola secundaria de administración de items). Gestiona registros, logins, JWT, productos y roles de usuario. Envía logs de forma asíncrona al Log Service. El login tiene **rate limiting**: 5 intentos fallidos en 60 s para el mismo usuario bloquean ese usuario 60 s (`429 Too Many Requests`) — mismo umbral que la alerta de fuerza bruta del Analysis Service, así que la detección y el bloqueo ocurren juntos. **Política de contraseña**: mínimo 8 caracteres, con mayúscula, minúscula, número y al menos 3 caracteres distintos.
+- **Auth Service ([puerto 8000](http://localhost:8000)):** API REST principal + dashboard embebido (anterior al de React; se mantiene como consola secundaria de administración de items). Gestiona registros, logins, JWT, productos y roles de usuario. Envía logs de forma asíncrona al Log Service. **Manejo de sesiones en Redis**: cada login registra una sesión `session:<jti>` con TTL igual a la vida del token; `POST /auth/logout` la elimina (el token deja de aceptarse al instante, aunque su firma siga vigente) y un `admin` puede listar y revocar sesiones ajenas (`GET`/`DELETE /auth/sessions`). El login tiene **rate limiting**: 5 intentos fallidos en 60 s para el mismo usuario bloquean ese usuario 60 s (`429 Too Many Requests`) — mismo umbral que la alerta de fuerza bruta del Analysis Service, así que la detección y el bloqueo ocurren juntos. **Política de contraseña**: mínimo 8 caracteres, con mayúscula, minúscula, número y al menos 3 caracteres distintos.
 - **Log Service ([puerto 8010](http://localhost:8010)):** Recolector de logs y consola web. Persiste cada evento en MongoDB y lo publica en RabbitMQ (exchange topic `logs_events`, routing key `logs.<nivel>`).
-- **Analysis Service ([puerto 8002](http://localhost:8002)):** consume los eventos de la cola `analysis_queue` (binding `logs.#`) en un hilo dedicado, les aplica el **motor de reglas de detección** (umbral, patrón regex y palabra clave — Semana 8) y publica cada alerta disparada en el exchange `alerts_events` con routing key `alerts.<severidad>`. Expone estadísticas agregadas (`/stats`, `/events/recent`) y la lista de reglas (`/rules`); los contadores se espejan en **Redis** (write-through) y se restauran al arrancar, así que sobreviven reinicios del contenedor.
+- **Analysis Service ([puerto 8002](http://localhost:8002)):** consume los eventos de la cola `analysis_queue` (binding `logs.#`) en un hilo dedicado, les aplica el **motor de reglas de detección** (umbral, patrón regex y palabra clave — Semana 8) y publica cada alerta disparada en el exchange `alerts_events` con routing key `alerts.<severidad>`. Expone estadísticas agregadas (`/stats`, `/events/recent`) y las reglas (`/rules`), que además son **configurables en caliente**: `PATCH /rules/{id}` (solo `admin`, también desde la pestaña Reglas del dashboard) activa o desactiva cada regla sin reiniciar nada. Los contadores y el estado de las reglas se espejan en **Redis** (write-through) y se restauran al arrancar, así que sobreviven reinicios del contenedor.
 - **Alert Service ([puerto 8003](http://localhost:8003)):** servicio Node.js/Express que consume las alertas de la cola `alerts_queue` (binding `alerts.#`), las **persiste en PostgreSQL** (`alerts_db.alerts`) y expone su API de consulta y ciclo de vida: `GET /alerts` (filtros por severidad/estado), `GET /alerts/stats` y `PATCH /alerts/:id` (nueva → reconocida → cerrada). Severidades: baja, media, alta, crítica. **`PATCH /alerts/:id` requiere JWT válido con rol `admin`** (Semana 10) — las lecturas siguen abiertas.
 - **RabbitMQ ([puerto 15672](http://localhost:15672) expuesto; AMQP 5672 solo red interna):** broker de mensajería para la comunicación asíncrona Log Service → Analysis Service (`logs_events`) y Analysis Service → Alert Service (`alerts_events`). UI de gestión en [http://localhost:15672](http://localhost:15672) (ver `.env` para credenciales).
 - **MongoDB (puerto 27017, solo red interna):** almacena los logs en la base `logs_db`, colección `logs`. Log Service espera activamente (`_wait_for_mongodb`, hasta 15 reintentos) a que MongoDB acepte conexiones antes de arrancar.
-- **Redis (puerto 6379, solo red interna):** caché del Analysis Service — contadores de eventos/alertas y últimos eventos, con AOF activado para que también sobrevivan reinicios del propio Redis. Sin `REDIS_HOST` definido, Analysis Service funciona solo en memoria (mismo patrón de fallback que el resto del stack).
+- **Redis (puerto 6379, solo red interna):** caché del Analysis Service — contadores de eventos/alertas, últimos eventos y estado de las reglas — y **almacén de sesiones del Auth Service** (`session:<jti>` con TTL igual a la vida del token: logout y revocación por admin invalidan tokens al instante). AOF activado para que todo sobreviva reinicios del propio Redis. Sin `REDIS_HOST` definido, ambos servicios funcionan sin Redis (estadísticas solo en memoria, sesiones sin estado — mismo patrón de fallback que el resto del stack).
 - **PostgreSQL (puerto 5432, solo red interna):** un único servidor Postgres con tres bases de datos aisladas (`auth_db`, `items_db`, `alerts_db`), creadas automáticamente vía script de inicialización (`postgres-init/`); si el volumen ya existía antes de la Semana 8, Alert Service crea `alerts_db` por sí mismo al arrancar. Si no hay servidor Postgres disponible, Auth Service cae automáticamente a SQLite local (`data/auth.db` / `data/items.db`) — útil para desarrollo sin Docker.
 - **Comunicación no bloqueante:** el Auth Service utiliza `BackgroundTasks` de FastAPI y un cliente HTTP (`requests`) para reportar eventos al Log Service sin penalizar la respuesta al cliente; el Log Service desacopla el análisis publicando a RabbitMQ.
 
@@ -334,11 +335,11 @@ El puerto `5672` (AMQP) no tiene un comando de inspección equivalente — no es
 
 #### `:6379` — Redis
 
-**Qué es:** el almacén clave-valor en memoria — la capa de caché del Analysis Service.
+**Qué es:** el almacén clave-valor en memoria — capa de caché del Analysis Service y almacén de sesiones del Auth Service.
 
-**Qué se implementa aquí:** los contadores agregados (`analysis:total_eventos`, `analysis:por_nivel`, `analysis:alertas_por_severidad`...) y la lista de últimos eventos (`analysis:eventos_recientes`). El Analysis Service escribe cada evento en memoria y en Redis a la vez (write-through, con `pipeline` para que sea un solo round-trip) y al arrancar restaura los valores desde Redis. AOF (`--appendonly yes`) hace que los datos sobrevivan también reinicios del contenedor de Redis.
+**Qué se implementa aquí:** (1) los contadores agregados (`analysis:total_eventos`, `analysis:por_nivel`, `analysis:alertas_por_severidad`...), la lista de últimos eventos (`analysis:eventos_recientes`) y el estado activada/desactivada de cada regla (`analysis:reglas_estado`) — el Analysis Service escribe cada evento en memoria y en Redis a la vez (write-through, con `pipeline` para que sea un solo round-trip) y al arrancar restaura los valores; (2) las **sesiones activas** (`session:<jti>`, una por login, con TTL igual a la vida del token) — el Auth Service solo acepta un token mientras su sesión exista, lo que hace posible el logout real y la revocación por admin. AOF (`--appendonly yes`) hace que los datos sobrevivan también reinicios del contenedor de Redis.
 
-**Por qué existe / cómo aporta:** antes de Redis, las estadísticas de `/stats` vivían solo en la memoria del proceso — un reinicio del contenedor las reseteaba a cero. Con Redis, el histórico agregado es estable sin necesidad de recalcularlo desde MongoDB, que es exactamente el rol de una capa de caché en un SIEM: lecturas rápidas de datos ya digeridos.
+**Por qué existe / cómo aporta:** antes de Redis, las estadísticas de `/stats` vivían solo en la memoria del proceso — un reinicio del contenedor las reseteaba a cero — y un JWT emitido valía hasta expirar, sin forma de revocarlo. Con Redis, el histórico agregado es estable sin recalcularlo desde MongoDB (el rol clásico de una caché en un SIEM: lecturas rápidas de datos ya digeridos) y las sesiones tienen estado en el servidor: cerrar sesión o expulsar a alguien surte efecto al instante.
 
 ### Opción B: Sin Docker (localmente en Windows)
 
@@ -381,9 +382,12 @@ Todos los endpoints que requieren estar logueado esperan el header `Authorizatio
 | `POST` | `/auth/register` | público | Registrar un nuevo usuario (rol `analista` por defecto). Rate limit: 10 registros/5min por IP |
 | `POST` | `/auth/login` | público | Obtener token JWT Bearer. Rate limit: 5 fallos/60s bloquean 60s |
 | `GET` | `/auth/me` | logueado | Perfil del usuario activo decodificado desde el token |
+| `POST` | `/auth/logout` | logueado | Cerrar la sesión: elimina `session:<jti>` de Redis y el token deja de aceptarse |
 | `POST` | `/auth/change-password` | logueado | Cambiar la contraseña propia (pide la actual) |
 | `GET` | `/auth/users` | `admin` | Listar todos los usuarios registrados |
 | `PATCH` | `/auth/users/{id}/role` | `admin` | Cambiar el rol de otro usuario (no el propio) |
+| `GET` | `/auth/sessions` | `admin` | Listar las sesiones activas guardadas en Redis (usuario, rol, expiración) |
+| `DELETE`| `/auth/sessions/{jti}` | `admin` | Revocar una sesión ajena: su token deja de aceptarse al instante |
 | `GET` | `/api/items` | logueado | Listar todos los artículos del inventario |
 | `GET` | `/api/items/{id}` | logueado | Ver un artículo puntual |
 | `POST` | `/api/items` | logueado | Crear un artículo nuevo |
@@ -406,7 +410,8 @@ Todos los endpoints que requieren estar logueado esperan el header `Authorizatio
 |--------|----------|------|-------------|
 | `GET` | `/stats` | logueado (cualquier rol) | Estadísticas agregadas de eventos consumidos (por nivel, por servicio) |
 | `GET` | `/events/recent` | logueado (cualquier rol) | Últimos eventos consumidos desde RabbitMQ (máx. 50 en memoria) |
-| `GET` | `/rules` | logueado (cualquier rol) | Lista de reglas de detección configuradas |
+| `GET` | `/rules` | logueado (cualquier rol) | Lista de reglas de detección con su estado activada/desactivada |
+| `PATCH` | `/rules/{id}` | `admin` | Activar/desactivar una regla en caliente (persiste en Redis entre reinicios) |
 | `GET` | `/api/health` | público | Estado del servicio |
 
 Este servicio no tiene ningún `POST` de negocio: los eventos que analiza los toma directo de la cola de RabbitMQ, no por HTTP.
@@ -424,7 +429,7 @@ Tampoco tiene `POST`: las alertas las genera Analysis Service y llegan por Rabbi
 
 ### Dashboard Service (`http://localhost:3000`) — dashboard principal
 
-Frontend React sin API propia. Su nginx expone la SPA en `/` y reenvía `/api/auth/*` → Auth Service, `/api/logs` → Log Service, `/api/analysis/*` → Analysis Service, `/api/alerts` → Alert Service y `/api/items` → Auth Service. Incluye: login/registro (con validación en vivo de los requisitos del Auth Service: usuario 3–50 caracteres, contraseña de mínimo 8 caracteres con mayúscula/minúscula/número y sin caracteres repetitivos como `11111111` — regla también aplicada en el backend, más mostrar/ocultar contraseña y errores anclados a cada campo), logs en tiempo real con filtros, estadísticas con gráficos, un CRUD de artículos (crear abierto a cualquier rol, editar/eliminar solo `admin`), alertas con búsqueda/orden/detalle del evento disparador/gráfico por severidad (ciclo de vida solo `admin`), y gestión de usuarios — cambio de rol, solo `admin` (un admin no puede cambiar su propio rol).
+Frontend React sin API propia. Su nginx expone la SPA en `/` y reenvía `/api/auth/*` → Auth Service, `/api/logs` → Log Service, `/api/analysis/*` → Analysis Service, `/api/alerts` → Alert Service y `/api/items` → Auth Service. Incluye: login/registro (con validación en vivo de los requisitos del Auth Service: usuario 3–50 caracteres, contraseña de mínimo 8 caracteres con mayúscula/minúscula/número y sin caracteres repetitivos como `11111111` — regla también aplicada en el backend, más mostrar/ocultar contraseña y errores anclados a cada campo), logs en tiempo real con filtros, estadísticas con gráficos, un CRUD de artículos (crear abierto a cualquier rol, editar/eliminar solo `admin`), alertas con búsqueda/orden/detalle del evento disparador/gráfico por severidad (ciclo de vida solo `admin`), **reglas de detección** (consulta para cualquier rol; activar/desactivar en caliente solo `admin`), y gestión de usuarios — cambio de rol, solo `admin` (un admin no puede cambiar su propio rol). El botón "Cerrar sesión" revoca la sesión también en el servidor (`POST /auth/logout`).
 
 ---
 
@@ -437,7 +442,7 @@ Docker Compose define cuatro volúmenes persistentes con drivers locales:
 1. **`postgres_data`** (montado en `/var/lib/postgresql/data` del contenedor `postgres`): persiste las tres bases de datos (`auth_db`, `items_db`, `alerts_db`) entre reinicios. Las bases se crean una única vez, en el primer arranque, vía `postgres-init/01-create-databases.sql`.
 2. **`mongo_data`** (montado en `/data/db` del contenedor `mongodb`): persiste la base `logs_db` (colección `logs`) entre reinicios.
 3. **`rabbitmq_data`** (montado en `/var/lib/rabbitmq` del contenedor `rabbitmq`): persiste colas y mensajes durables (exchanges `logs_events` y `alerts_events`, colas `analysis_queue` y `alerts_queue`) entre reinicios.
-4. **`redis_data`** (montado en `/data` del contenedor `redis`): persiste los contadores de estadísticas del Analysis Service (AOF activado), para que sobrevivan también reinicios del propio Redis.
+4. **`redis_data`** (montado en `/data` del contenedor `redis`): persiste los contadores de estadísticas y el estado de las reglas del Analysis Service, y las sesiones activas del Auth Service (AOF activado), para que sobrevivan también reinicios del propio Redis.
 
 **Variables de entorno de conexión de Auth Service** (definidas en `docker-compose.yml`, con valores tomados de `.env`): `POSTGRES_HOST=postgres`, `POSTGRES_PORT=5432`, `POSTGRES_USER`/`POSTGRES_PASSWORD` (`${POSTGRES_USER}`/`${POSTGRES_PASSWORD}`), `JWT_SECRET_KEY`, `CORS_ORIGINS`. Auth Service espera activamente (`_wait_for_postgres`, hasta 15 reintentos) a que Postgres acepte conexiones antes de crear las tablas — necesario porque el healthcheck de Docker garantiza que el proceso esté "healthy" pero no elimina toda condición de carrera en el primer arranque.
 
@@ -463,7 +468,8 @@ Todo vive **únicamente en este equipo**. Los almacenes y su contenido:
 | Artículos del CRUD (nombre, descripción, precio, oferta) | PostgreSQL `items_db` | volumen `postgres_data` |
 | Alertas de seguridad (severidad, estado, evento disparador) | PostgreSQL `alerts_db` | volumen `postgres_data` |
 | Logs de auditoría: cada login (exitoso o fallido), registro, acción CRUD y acceso denegado (401/403), con usuario y timestamp | MongoDB `logs_db.logs` | volumen `mongo_data` |
-| Contadores de estadísticas y últimos eventos (caché) | Redis | volumen `redis_data` |
+| Contadores de estadísticas, últimos eventos y estado de reglas (caché) | Redis | volumen `redis_data` |
+| Sesiones activas (`session:<jti>`: usuario, rol, expiración — sin contraseñas ni tokens) | Redis | volumen `redis_data` |
 | Mensajes en tránsito entre servicios (se consumen y se borran) | RabbitMQ | volumen `rabbitmq_data` |
 | Backups de las 4 bases (diario 3 AM + manuales) | carpeta `backups/` | repo local (no versionada) |
 | Credenciales y secreto JWT | archivo `.env` | repo local (no versionado) |
@@ -481,7 +487,7 @@ El único punto de entrada desde afuera es **nginx** (dashboard-service): el nav
 
 ### Sesiones
 
-No hay sesiones en el servidor: se usa **JWT stateless**. Al hacer login, Auth Service firma un token (HMAC-SHA256, secreto en `.env`) con **expiración de 60 minutos**; el navegador lo guarda en `localStorage` y lo envía en cada petición (`Authorization: Bearer`). Cerrar sesión = borrar el token del navegador. Al **cambiar la contraseña**, todos los tokens emitidos antes del cambio quedan revocados: cada token lleva su fecha de emisión (`iat`) y se compara contra `users.password_changed_at` — sin necesidad de mantener una lista de tokens revocados. El usuario debe iniciar sesión de nuevo con la contraseña nueva.
+Autenticación por **JWT** con **manejo de sesiones en Redis**. Al hacer login, Auth Service firma un token (HMAC-SHA256, secreto en `.env`) con **expiración de 60 minutos** y registra la sesión en Redis (`session:<jti>`, con TTL igual a la vida del token); el navegador guarda el token en `localStorage` y lo envía en cada petición (`Authorization: Bearer`). Un token solo se acepta mientras su sesión exista: **cerrar sesión** (`POST /auth/logout`) la elimina y el token queda revocado al instante aunque su firma siga vigente, y un `admin` puede listar las sesiones activas y **revocar una ajena** (`GET`/`DELETE /auth/sessions`). Al **cambiar la contraseña**, todos los tokens emitidos antes del cambio quedan revocados además por marca de tiempo: cada token lleva su fecha de emisión (`iat`) y se compara contra `users.password_changed_at`. Si Redis no está disponible, el sistema degrada a JWT sin estado (el token vale hasta expirar) en lugar de bloquear los logins.
 
 ### Qué sale del equipo
 
