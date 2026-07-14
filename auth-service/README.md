@@ -15,17 +15,24 @@ Incluye rate limiting de login: 5 intentos fallidos en 60s bloquean al usuario 6
 | `POST` | `/auth/register` | público |
 | `POST` | `/auth/login` | público |
 | `GET` | `/auth/me` | cualquier usuario autenticado |
+| `POST` | `/auth/logout` | cualquier usuario autenticado |
 | `GET` | `/auth/users` | `admin` |
 | `PATCH` | `/auth/users/{id}/role` | `admin` (no puede cambiar su propio rol) |
+| `GET` | `/auth/sessions` | `admin` |
+| `DELETE` | `/auth/sessions/{jti}` | `admin` |
 | `GET`/`POST` | `/api/items` | cualquier usuario autenticado |
 | `PUT`/`DELETE` | `/api/items/{id}` | `admin` |
 | `GET` | `/api/health` | público |
 
 Documentación interactiva completa (Swagger/OpenAPI, autogenerada por FastAPI): `http://localhost:8000/docs`.
 
+## Manejo de sesiones (Redis)
+
+Cada login registra una sesión `session:<jti>` en Redis (usuario, rol, fecha) con TTL igual a la vida del token (60 min). Un token **solo se acepta mientras su sesión exista**: `POST /auth/logout` la elimina (revocación inmediata, aunque la firma del JWT siga siendo válida) y un `admin` puede listar las sesiones activas (`GET /auth/sessions`) y revocar una ajena (`DELETE /auth/sessions/{jti}`). Si Redis se cae en caliente, la autenticación **no se bloquea**: degrada a JWT sin estado (fail-open), igual que el resto de fallbacks del proyecto.
+
 ## Variables de entorno
 
-Ver `docker-compose.yml` (sección `auth-service`) y `.env.example` en la raíz del repo. Las relevantes para este servicio: `POSTGRES_HOST/PORT/USER/PASSWORD`, `JWT_SECRET_KEY`, `LOG_SERVICE_URL`, `CORS_ORIGINS`. Sin `POSTGRES_HOST` definido, cae automáticamente a SQLite local (`data/auth.db`, `data/items.db`).
+Ver `docker-compose.yml` (sección `auth-service`) y `.env.example` en la raíz del repo. Las relevantes para este servicio: `POSTGRES_HOST/PORT/USER/PASSWORD`, `JWT_SECRET_KEY`, `LOG_SERVICE_URL`, `CORS_ORIGINS`, `REDIS_HOST/PORT` (opcional — sin `REDIS_HOST`, sesiones sin estado, solo JWT). Sin `POSTGRES_HOST` definido, cae automáticamente a SQLite local (`data/auth.db`, `data/items.db`).
 
 ## Logging
 
@@ -38,7 +45,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-`tests/test_auth.py` cubre registro, login, emisión de JWT y control de acceso por rol.
+`tests/test_auth.py` cubre registro, login, emisión de JWT, control de acceso por rol y cierre de sesión.
 
 ## Levantar solo este servicio
 

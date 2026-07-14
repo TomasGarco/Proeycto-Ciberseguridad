@@ -4,10 +4,12 @@ import os
 import time
 import platform
 import sys
+import uuid
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from typing import List, Optional
 
+import redis
 import requests
 from fastapi import FastAPI, HTTPException, Request, status, Depends, BackgroundTasks
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -49,6 +51,34 @@ def log_event(level: str, category: str, message: str):
 SECRET_KEY = os.getenv("JWT_SECRET_KEY", "changeme-super-secret-key-for-jwt-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
+
+# Redis (manejo de sesiones): cada login registra una sesión `session:<jti>`
+# con TTL igual a la vida del token; el logout la elimina — revocación real
+# del lado del servidor, algo que un JWT puro no permite. Sin REDIS_HOST el
+# servicio funciona con JWT sin estado — mismo patrón de fallback que
+# POSTGRES_HOST aquí y REDIS_HOST en analysis-service.
+REDIS_HOST = os.getenv("REDIS_HOST")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+SESSION_PREFIX = "session:"
+
+_redis = None
+if REDIS_HOST:
+    _redis_client = redis.Redis(
+        host=REDIS_HOST, port=REDIS_PORT, decode_responses=True,
+        socket_connect_timeout=3, socket_timeout=3,
+    )
+    for _attempt in range(1, 6):
+        try:
+            _redis_client.ping()
+            _redis = _redis_client
+            log_event("INFO", "REDIS", f"Sesiones gestionadas en Redis ({REDIS_HOST}:{REDIS_PORT}).")
+            break
+        except redis.exceptions.RedisError as e:
+            if _attempt == 5:
+                log_event("WARNING", "REDIS", f"Sin conexión tras 5 intentos ({e}) — sesiones sin estado (solo JWT).")
+            else:
+                log_event("INFO", "REDIS", f"Esperando a Redis... (intento {_attempt}/5)")
+                time.sleep(2)
 
 # Rate limit de login por usuario: mismo umbral que la regla 'fuerza-bruta-login'
 # del Analysis Service (5 intentos fallidos en 60s), para que el bloqueo llegue
@@ -338,13 +368,34 @@ def hash_password(password: str) -> str:
     return pwd_context.hash(password)
 
 
+def _register_session(jti: str, username: str, role: str) -> None:
+    """Guarda la sesión en Redis con TTL igual a la vida del token. Sin Redis
+    no hace nada: el token JWT sigue siendo válido por sí mismo (sin estado)."""
+    if _redis is None:
+        return
+    try:
+        key = SESSION_PREFIX + jti
+        _redis.hset(key, mapping={
+            "username": username,
+            "role": role,
+            "creado_en": datetime.utcnow().isoformat(),
+        })
+        _redis.expire(key, ACCESS_TOKEN_EXPIRE_MINUTES * 60)
+    except redis.exceptions.RedisError as e:
+        log_event("WARNING", "REDIS", f"No se pudo registrar la sesión de '{username}' ({e}).")
+
+
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
     now       = datetime.utcnow()
     expire    = now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     # "iat" (issued at) permite compararlo contra users.password_changed_at
     # y rechazar tokens emitidos antes del último cambio de contraseña.
-    to_encode.update({"exp": expire, "iat": now})
+    # "jti" (JWT ID) identifica la sesión en Redis — logout borra esa clave
+    # y el token deja de aceptarse aunque su firma siga siendo válida.
+    jti = uuid.uuid4().hex
+    to_encode.update({"exp": expire, "iat": now, "jti": jti})
+    _register_session(jti, to_encode.get("sub", "?"), to_encode.get("role", "?"))
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
@@ -386,6 +437,24 @@ def get_current_user(
     if not user:
         send_log("ERROR", f"Token válido pero el usuario '{username}' ya no existe en la base de datos.")
         raise HTTPException(status_code=401, detail="Usuario no encontrado.")
+    if _redis is not None:
+        # Manejo de sesiones: el token solo se acepta mientras su sesión
+        # session:<jti> exista en Redis (el logout o un admin la eliminan).
+        # Si Redis se cae en caliente no se bloquea a nadie: el JWT firmado
+        # sigue siendo la fuente de verdad (fail-open, como el resto de
+        # fallbacks del proyecto).
+        try:
+            jti = payload.get("jti")
+            session_exists = bool(jti) and bool(_redis.exists(SESSION_PREFIX + jti))
+        except redis.exceptions.RedisError:
+            session_exists = True
+        if not session_exists:
+            send_log("WARNING", f"Token de '{username}' rechazado: su sesión fue cerrada o revocada.")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="La sesión fue cerrada. Iniciá sesión de nuevo.",
+                headers={"WWW-Authenticate": "Bearer"}
+            )
     if user.password_changed_at is not None:
         # Revocación por marca de tiempo: si el token se emitió antes del último
         # cambio de contraseña (o ni siquiera trae "iat", por ser anterior a esta
@@ -798,6 +867,106 @@ def get_me(current_user: UserORM = Depends(get_current_user)):
     Útil para que el frontend valide la sesión y conozca el rol activo.
     """
     return current_user
+
+
+@app.post(
+    "/auth/logout",
+    tags=["Auth"],
+    summary="Cerrar la sesión actual",
+    responses={401: {"description": "Token ausente, inválido o expirado"}},
+)
+def logout(
+    background_tasks: BackgroundTasks,
+    token: str = Depends(oauth2_scheme),
+    current_user: UserORM = Depends(get_current_user),
+):
+    """
+    Cierra la sesión del lado del servidor: elimina la clave `session:<jti>`
+    de Redis, con lo que este token deja de ser aceptado de inmediato aunque
+    su firma siga siendo válida. Sin Redis configurado el cierre queda solo
+    del lado del cliente (descartar el token).
+    """
+    revocada = False
+    if _redis is not None:
+        try:
+            payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+            jti = payload.get("jti")
+            if jti:
+                revocada = bool(_redis.delete(SESSION_PREFIX + jti))
+        except (JWTError, redis.exceptions.RedisError) as e:
+            log_event("WARNING", "REDIS", f"No se pudo revocar la sesión de '{current_user.username}' ({e}).")
+    background_tasks.add_task(send_log, "INFO", f"Cierre de sesión del usuario: '{current_user.username}'")
+    return {"detail": "Sesión cerrada correctamente.", "revocada_en_servidor": revocada}
+
+
+@app.get(
+    "/auth/sessions",
+    tags=["Auth"],
+    summary="Sesiones activas (solo admin)",
+    responses={401: {"description": "Token ausente, inválido o expirado"},
+               403: {"description": "El usuario no tiene rol admin"}},
+)
+def list_sessions(_: UserORM = Depends(require_admin)):
+    """
+    Lista las sesiones activas guardadas en Redis (una por login vigente), con
+    usuario, rol, fecha de creación y segundos restantes hasta expirar. Con
+    Redis sin configurar devuelve la lista vacía y `persistencia: memoria`.
+    """
+    sessions = []
+    if _redis is not None:
+        try:
+            for key in _redis.scan_iter(SESSION_PREFIX + "*"):
+                data = _redis.hgetall(key)
+                sessions.append({
+                    "jti": key[len(SESSION_PREFIX):],
+                    "username": data.get("username"),
+                    "role": data.get("role"),
+                    "creado_en": data.get("creado_en"),
+                    "expira_en_segundos": _redis.ttl(key),
+                })
+        except redis.exceptions.RedisError as e:
+            log_event("WARNING", "REDIS", f"No se pudieron listar las sesiones ({e}).")
+    sessions.sort(key=lambda s: s.get("creado_en") or "", reverse=True)
+    return {
+        "persistencia": "redis" if _redis is not None else "memoria",
+        "total": len(sessions),
+        "sesiones": sessions,
+    }
+
+
+@app.delete(
+    "/auth/sessions/{jti}",
+    tags=["Auth"],
+    summary="Revocar una sesión (solo admin)",
+    responses={401: {"description": "Token ausente, inválido o expirado"},
+               403: {"description": "El usuario no tiene rol admin"},
+               404: {"description": "No hay una sesión activa con ese identificador"},
+               503: {"description": "Redis no disponible"}},
+)
+def revoke_session(
+    jti: str,
+    background_tasks: BackgroundTasks,
+    admin: UserORM = Depends(require_admin),
+):
+    """
+    Revoca una sesión ajena por su identificador (ver `GET /auth/sessions`):
+    el token asociado deja de aceptarse de inmediato. Pensado para que un
+    admin pueda expulsar una sesión sospechosa sin esperar a que expire.
+    """
+    if _redis is None:
+        raise HTTPException(status_code=503, detail="El manejo de sesiones en Redis no está disponible.")
+    try:
+        data = _redis.hgetall(SESSION_PREFIX + jti)
+        deleted = _redis.delete(SESSION_PREFIX + jti)
+    except redis.exceptions.RedisError as e:
+        raise HTTPException(status_code=503, detail=f"Redis no disponible: {e}")
+    if not deleted:
+        raise HTTPException(status_code=404, detail="No existe una sesión activa con ese identificador.")
+    background_tasks.add_task(
+        send_log, "WARNING",
+        f"El administrador '{admin.username}' revocó la sesión del usuario '{data.get('username', '?')}'."
+    )
+    return {"detail": "Sesión revocada.", "username": data.get("username")}
 
 
 @app.post(

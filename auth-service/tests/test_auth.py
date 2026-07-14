@@ -108,3 +108,30 @@ def test_non_admin_cannot_access_admin_endpoint(client):
 
     # Assert
     assert response.status_code == 403
+
+
+def test_logout_succeeds(client):
+    # Arrange
+    username, password, _ = _register(client)
+    token = client.post("/auth/login", data={"username": username, "password": password}).json()["access_token"]
+
+    # Act
+    response = client.post("/auth/logout", headers={"Authorization": f"Bearer {token}"})
+
+    # Assert: sin Redis (los tests corren sin REDIS_HOST) la revocación en
+    # servidor no aplica, pero el endpoint responde igual y lo dice.
+    assert response.status_code == 200
+    body = response.json()
+    assert "revocada_en_servidor" in body
+
+
+def test_sessions_list_requires_admin(client):
+    # Arrange: usuario con rol "analista"
+    username, password, _ = _register(client)
+    token = client.post("/auth/login", data={"username": username, "password": password}).json()["access_token"]
+
+    # Act
+    response = client.get("/auth/sessions", headers={"Authorization": f"Bearer {token}"})
+
+    # Assert
+    assert response.status_code == 403

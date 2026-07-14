@@ -9,6 +9,7 @@ import os
 import sys
 
 os.environ.setdefault("POSTGRES_HOST", "")  # fuerza el fallback a SQLite
+os.environ.pop("REDIS_HOST", None)  # sin Redis: sesiones sin estado (solo JWT)
 os.chdir(os.path.dirname(os.path.dirname(__file__)))  # data/ relativa a auth-service/, no a tests/
 
 import pytest
