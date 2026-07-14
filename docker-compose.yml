@@ -34,6 +34,10 @@ services:
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:-changeme-super-secret-key-for-jwt-in-production}
       - CORS_ORIGINS=${CORS_ORIGINS:-https://localhost}
+      # Manejo de sesiones (session:<jti> con TTL) — logout y revocación
+      # por admin invalidan tokens al instante, ver auth-service/README.md.
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
     volumes:
       - ./docs:/app/docs:ro
       - ./README.md:/app/README.md:ro
@@ -41,6 +45,8 @@ services:
       log-service:
         condition: service_started
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
@@ -189,8 +195,9 @@ services:
     # AOF activado para que los contadores del Analysis Service sobrevivan
     # reinicios del contenedor de Redis, no solo del servicio.
     command: ["redis-server", "--appendonly", "yes"]
-    # Sin mapeo a host: solo lo consume analysis-service en la red interna de
-    # Docker. Para inspección manual usar "docker exec redis redis-cli ...".
+    # Sin mapeo a host: solo lo consumen analysis-service (caché de stats) y
+    # auth-service (sesiones) en la red interna de Docker. Para inspección
+    # manual usar "docker exec redis redis-cli ...".
     volumes:
       - redis_data:/data
     healthcheck:
